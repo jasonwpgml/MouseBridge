@@ -24,6 +24,8 @@ use input_event::scancode::{
     Linux::{KeyLeftAlt, KeyLeftCtrl, KeyLeftMeta, KeyLeftShift},
 };
 
+use crate::key_remap::KeyRemap;
+
 use shadow_rs::shadow;
 
 shadow!(build);
@@ -69,6 +71,8 @@ struct ConfigToml {
     cert_path: Option<PathBuf>,
     clients: Option<Vec<TomlClient>>,
     authorized_fingerprints: Option<HashMap<String, String>>,
+    /// per-client key remapping, keyed by client hostname
+    key_remap: Option<HashMap<String, HashMap<scancode::Linux, scancode::Linux>>>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
@@ -500,6 +504,17 @@ impl Config {
             .unwrap_or(Vec::from_iter(DEFAULT_RELEASE_KEYS.iter().cloned()))
     }
 
+    /// key remapping for the client with the given hostname
+    pub fn key_remap(&self, hostname: &str) -> Option<KeyRemap> {
+        self.config_toml
+            .as_ref()?
+            .key_remap
+            .as_ref()?
+            .iter()
+            .find(|(h, _)| h.eq_ignore_ascii_case(hostname))
+            .map(|(_, map)| KeyRemap::new(map))
+    }
+
     /// set configured clients
     pub fn set_clients(&mut self, clients: Vec<ConfigClient>) {
         if clients.is_empty() {
@@ -582,5 +597,34 @@ impl Config {
         let _ = self.watch();
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY_REMAP_TOML: &str = r#"
+[key_remap.DESKTOP-SN73G0N]
+KeyLeftMeta = "KeyLeftCtrl"
+KeyF18 = "KeyHanguel"
+"#;
+
+    #[test]
+    fn parses_key_remap() {
+        let doc = KEY_REMAP_TOML.parse::<DocumentMut>().unwrap();
+        let config: ConfigToml = toml_edit::de::from_document(doc).unwrap();
+        let remap = &config.key_remap.as_ref().unwrap()["DESKTOP-SN73G0N"];
+        assert_eq!(remap[&scancode::Linux::KeyF18], scancode::Linux::KeyHanguel);
+    }
+
+    #[test]
+    fn key_remap_survives_write_back() {
+        let doc = KEY_REMAP_TOML.parse::<DocumentMut>().unwrap();
+        let config: ConfigToml = toml_edit::de::from_document(doc).unwrap();
+        let written = toml_edit::ser::to_string_pretty(&config).unwrap();
+        let doc = written.parse::<DocumentMut>().unwrap();
+        let reread: ConfigToml = toml_edit::de::from_document(doc).unwrap();
+        assert_eq!(reread, config);
     }
 }

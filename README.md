@@ -425,6 +425,25 @@ port = 4242
 
 Where `left` can be either `left`, `right`, `top` or `bottom`.
 
+### Key remapping
+Keys sent to a client can be remapped per client, keyed by the client's `hostname`
+(case-insensitive). Remapping a modifier key also remaps its modifier state.
+Key names are the same as for the release bind.
+
+```toml
+# Mac -> Windows: Cmd acts as Ctrl and vice versa,
+# F18 (e.g. right Cmd remapped by Karabiner) toggles the Korean IME
+[key_remap.iridium]
+KeyLeftMeta = "KeyLeftCtrl"
+KeyLeftCtrl = "KeyLeftMeta"
+KeyRightmeta = "KeyRightCtrl"
+KeyRightCtrl = "KeyRightmeta"
+KeyF18 = "KeyHanguel"
+```
+
+On Windows, `KeyHanguel` and `KeyHanja` are emulated as the `VK_HANGUL` and
+`VK_HANJA` virtual keys so they toggle the IME regardless of keyboard type.
+
 ## Roadmap
 - [x] Graphical frontend (gtk + libadwaita)
 - [x] respect xdg-config-home for config file location.

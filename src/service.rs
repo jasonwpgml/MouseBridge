@@ -524,6 +524,7 @@ impl Service {
         if self.client_manager.activate_client(handle) {
             /* notify capture and frontends */
             self.capture.create(handle, pos, CaptureType::Default);
+            self.update_key_remap(handle);
             self.broadcast_client(handle);
             log::info!("activated client {handle} ({pos})");
         }
@@ -558,8 +559,20 @@ impl Service {
         log::info!("hostname changed: {hostname:?}");
         if self.client_manager.set_hostname(handle, hostname.clone()) {
             self.resolve(handle);
+            self.update_key_remap(handle);
         }
         self.broadcast_client(handle);
+    }
+
+    fn update_key_remap(&mut self, handle: ClientHandle) {
+        let remap = self
+            .client_manager
+            .get_hostname(handle)
+            .and_then(|hostname| self.config.key_remap(&hostname));
+        if remap.is_some() {
+            log::info!("key remapping enabled for client {handle}");
+        }
+        self.capture.set_key_remap(handle, remap);
     }
 
     fn update_port(&mut self, handle: ClientHandle, port: u16) {

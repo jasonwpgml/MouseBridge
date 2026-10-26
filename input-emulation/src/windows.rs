@@ -17,6 +17,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT_0, KEYEVENTF_EXTENDEDKEY, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, SendInput,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    MAPVK_VK_TO_VSC, MapVirtualKeyW, VIRTUAL_KEY, VK_HANGUL, VK_HANJA,
+};
 use windows::Win32::UI::WindowsAndMessaging::{XBUTTON1, XBUTTON2};
 
 use super::{Emulation, EmulationHandle};
@@ -63,7 +66,8 @@ impl Emulation for WindowsEmulation {
                     match state {
                         // pressed
                         0 => self.kill_repeat_task(),
-                        1 => self.spawn_repeat_task(key).await,
+                        // repeating an IME toggle would flip the input mode back and forth
+                        1 if ime_virtual_key(key).is_none() => self.spawn_repeat_task(key).await,
                         _ => {}
                     }
                     key_event(key, state)
@@ -194,6 +198,21 @@ fn scroll(axis: u8, value: i32) {
 }
 
 fn key_event(key: u32, state: u8) {
+    if let Some(vk) = ime_virtual_key(key) {
+        let ki = KEYBDINPUT {
+            wVk: vk,
+            wScan: unsafe { MapVirtualKeyW(vk.0 as u32, MAPVK_VK_TO_VSC) } as u16,
+            dwFlags: if state == 0 {
+                KEYEVENTF_KEYUP
+            } else {
+                Default::default()
+            },
+            time: 0,
+            dwExtraInfo: 0,
+        };
+        send_keyboard_input(ki);
+        return;
+    }
     let scancode = match linux_keycode_to_windows_scancode(key) {
         Some(code) => code,
         None => return,
@@ -215,6 +234,16 @@ fn key_event(key: u32, state: u8) {
         dwExtraInfo: 0,
     };
     send_keyboard_input(ki);
+}
+
+/// Korean IME toggle keys, sent as virtual keys: their scancodes differ
+/// between keyboard types, but the IME always reacts to the virtual key.
+fn ime_virtual_key(key: u32) -> Option<VIRTUAL_KEY> {
+    match scancode::Linux::try_from(key) {
+        Ok(scancode::Linux::KeyHanguel) => Some(VK_HANGUL),
+        Ok(scancode::Linux::KeyHanja) => Some(VK_HANJA),
+        _ => None,
+    }
 }
 
 fn linux_keycode_to_windows_scancode(linux_keycode: u32) -> Option<u16> {

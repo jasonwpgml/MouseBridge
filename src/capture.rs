@@ -1,5 +1,6 @@
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -14,7 +15,7 @@ use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
 
-use crate::connect::LanMouseConnection;
+use crate::{connect::LanMouseConnection, key_remap::KeyRemap};
 
 pub(crate) struct Capture {
     cancellation_token: CancellationToken,
@@ -68,6 +69,8 @@ enum CaptureRequest {
     Reenable,
     /// set release bind
     SetReleaseBind(Vec<scancode::Linux>),
+    /// set key remapping for events sent to a client
+    SetKeyRemap(CaptureHandle, Option<KeyRemap>),
 }
 
 impl Capture {
@@ -86,6 +89,7 @@ impl Capture {
             captures: Default::default(),
             conn,
             event_tx,
+            key_remaps: Default::default(),
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
             state: Default::default(),
@@ -144,6 +148,12 @@ impl Capture {
     pub(crate) fn set_release_bind(&mut self, bind: Vec<scancode::Linux>) {
         let _ = self.request_tx.send(CaptureRequest::SetReleaseBind(bind));
     }
+
+    pub(crate) fn set_key_remap(&self, handle: CaptureHandle, remap: Option<KeyRemap>) {
+        let _ = self
+            .request_tx
+            .send(CaptureRequest::SetKeyRemap(handle, remap));
+    }
 }
 
 /// debounce a statement `$st`, i.e. the statement is executed only if the
@@ -170,6 +180,7 @@ struct CaptureTask {
     captures: Vec<(CaptureHandle, Position, CaptureType)>,
     conn: LanMouseConnection,
     event_tx: Sender<ICaptureEvent>,
+    key_remaps: HashMap<CaptureHandle, KeyRemap>,
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
     state: State,
@@ -182,6 +193,21 @@ impl CaptureTask {
 
     fn remove_capture(&mut self, handle: CaptureHandle) {
         self.captures.retain(|&(h, ..)| handle != h);
+        self.key_remaps.remove(&handle);
+    }
+
+    fn set_key_remap(&mut self, handle: CaptureHandle, remap: Option<KeyRemap>) {
+        match remap {
+            Some(remap) => self.key_remaps.insert(handle, remap),
+            None => self.key_remaps.remove(&handle),
+        };
+    }
+
+    fn remap(&self, handle: CaptureHandle, event: Event) -> Event {
+        match self.key_remaps.get(&handle) {
+            Some(remap) => remap.apply(event),
+            None => event,
+        }
     }
 
     fn is_default_capture_at(&self, pos: Position) -> bool {
@@ -221,6 +247,7 @@ impl CaptureTask {
                         CaptureRequest::SetReleaseBind(bind) => {
                             self.release_bind.borrow_mut().clone_from(&bind);
                         }
+                        CaptureRequest::SetKeyRemap(h, r) => self.set_key_remap(h, r),
                     },
                     _ = self.cancellation_token.cancelled() => return,
                 }
@@ -324,6 +351,7 @@ impl CaptureTask {
                     CaptureRequest::SetReleaseBind(bind) => {
                         self.release_bind.borrow_mut().clone_from(&bind);
                     }
+                    CaptureRequest::SetKeyRemap(h, r) => self.set_key_remap(h, r),
                 },
                 _ = self.cancellation_token.cancelled() => break,
             }
@@ -378,7 +406,7 @@ impl CaptureTask {
             CaptureEvent::Input(e) => match self.state {
                 // connection not acknowledged, repeat `Enter` event
                 State::WaitingForAck => ProtoEvent::Enter(opposite_pos),
-                State::Sending => ProtoEvent::Input(e),
+                State::Sending => ProtoEvent::Input(self.remap(handle, e)),
             },
         };
 
@@ -414,12 +442,14 @@ impl CaptureTask {
             // then runs every subsequent keystroke through those held
             // mods until its watchdog times out (1+ s) or our Leave
             // arrives — and Leave can be lost over UDP/DTLS.
+            // Remapped like regular input so the peer releases the key it saw pressed.
             for key in capture.take_pressed_keys() {
-                let key_up = ProtoEvent::Input(Event::Keyboard(KeyboardEvent::Key {
+                let key_up = Event::Keyboard(KeyboardEvent::Key {
                     time: 0,
                     key: key as u32,
                     state: 0,
-                }));
+                });
+                let key_up = ProtoEvent::Input(self.remap(handle, key_up));
                 if let Err(e) = self.conn.send(key_up, handle).await {
                     log::warn!("failed to send key-up to client {handle}: {e}");
                 }
