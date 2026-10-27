@@ -90,10 +90,10 @@ trap 'rm -rf "$TMP"' EXIT
 curl -fL --progress-bar -o "$TMP/mousebridge.zip" "$URL"
 ditto -x -k "$TMP/mousebridge.zip" "$TMP"
 
-# stop MouseBridge and Lan Mouse, which it replaces
-for exe in "MouseBridge.app/Contents/MacOS/mousebridge" "Lan Mouse.app/Contents/MacOS/lan-mouse"; do
-    pkill -f "$exe" 2>/dev/null || true
-done
+# stop MouseBridge and Lan Mouse, which it replaces, by process name: a
+# pattern on the full command line would also hit shells mentioning the path
+pkill -x mousebridge 2>/dev/null || true
+pkill -x lan-mouse 2>/dev/null || true
 if [ -w /Applications ]; then APP="/Applications/MouseBridge.app"; else APP="$HOME/Applications/MouseBridge.app"; fi
 mkdir -p "$(dirname "$APP")"
 rm -rf "$APP"
