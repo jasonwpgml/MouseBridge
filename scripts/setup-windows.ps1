@@ -99,14 +99,26 @@ if ($trusted.Count) { $lines += @('', '[authorized_fingerprints]') + $trusted }
 [System.IO.File]::WriteAllLines($conf, [string[]]$lines, [System.Text.UTF8Encoding]::new($false))
 Write-Host "설정: $conf"
 
-$shortcut = (New-Object -ComObject WScript.Shell).CreateShortcut(
-    (Join-Path ([Environment]::GetFolderPath('Programs')) 'Lan Mouse.lnk'))
+$shell = New-Object -ComObject WScript.Shell
+# Start menu: the window, for settings and authorizing devices
+$shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'Lan Mouse.lnk'))
 $shortcut.TargetPath = $exe
 $shortcut.WorkingDirectory = $dir
 $shortcut.Save()
 
-Start-Process $exe -WorkingDirectory $dir
+# Startup: the service on its own, without a console window. The window
+# attaches to a running service and leaves it running when closed.
+$conhost = Join-Path $env:SystemRoot 'System32\conhost.exe'
+$daemonArgs = "--headless `"$exe`" daemon"
+$autostart = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Startup')) 'Lan Mouse.lnk'))
+$autostart.TargetPath = $conhost
+$autostart.Arguments = $daemonArgs
+$autostart.WorkingDirectory = $dir
+$autostart.Save()
+
+Start-Process $conhost -ArgumentList $daemonArgs -WorkingDirectory $dir
 
 Step '남은 일'
 Write-Host "1. 방화벽 창이 뜨면 '개인 네트워크' 허용"
 Write-Host '2. Mac 설정이 끝나면 화면 가장자리로 커서를 넘겨 확인'
+Write-Host '로그인하면 Lan Mouse가 창 없이 자동으로 켜져요. 설정은 시작 메뉴의 Lan Mouse로 열고, 창을 닫아도 계속 동작해요.'

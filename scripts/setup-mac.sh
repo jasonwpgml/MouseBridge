@@ -188,6 +188,11 @@ tccutil reset All de.feschber.LanMouse >/dev/null 2>&1 || true
 open "$APP"
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
+# start with every login; macOS may ask to let Terminal control System Events
+if ! osascript -e "tell application \"System Events\" to if not (exists login item \"Lan Mouse\") then make login item at end with properties {path:\"$APP\", hidden:true}" >/dev/null 2>&1; then
+    echo "로그인 항목 추가에 실패했어요 — 시스템 설정 > 일반 > 로그인 항목에서 Lan Mouse를 추가하세요." >&2
+fi
+
 step "남은 일"
 echo "1. 손쉬운 사용 목록에서 Lan Mouse를 켜고, Lan Mouse를 껐다 켜기"
 echo "2. Windows에서 Mac 쪽으로 넘어올 때 Mac에 'Authorize' 창이 뜨면 허용"
