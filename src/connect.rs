@@ -7,7 +7,7 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     io,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     rc::Rc,
     sync::Arc,
     time::Duration,
@@ -71,24 +71,58 @@ async fn connect(
     }
 }
 
+/// how long addresses on the local network are tried alone, before others
+/// (a VPN's, say) join in
+const LAN_HEAD_START: Duration = Duration::from_millis(500);
+
+/// whether the address is on the local network
+fn is_lan(addr: &SocketAddr) -> bool {
+    match addr.ip() {
+        IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
+        // unique local addresses are left out: VPNs like Tailscale use them
+        IpAddr::V6(ip) => ip.is_unicast_link_local(),
+    }
+}
+
+/// Connects to whichever address answers first, giving local network
+/// addresses a head start so a slower route like a VPN only wins when the
+/// local one fails.
 async fn connect_any(
     addrs: &[SocketAddr],
     cert: Certificate,
 ) -> Result<(Arc<dyn Conn + Send + Sync>, SocketAddr), LanMouseConnectionError> {
+    let (lan, others): (Vec<SocketAddr>, Vec<SocketAddr>) = addrs.iter().partition(|a| is_lan(a));
     let mut joinset = JoinSet::new();
-    for &addr in addrs {
+    for &addr in &lan {
         joinset.spawn_local(connect(addr, cert.clone()));
     }
+    let head_start = tokio::time::sleep(if lan.is_empty() {
+        Duration::ZERO
+    } else {
+        LAN_HEAD_START
+    });
+    tokio::pin!(head_start);
+    let mut others_started = others.is_empty();
     loop {
-        match joinset.join_next().await {
-            None => return Err(LanMouseConnectionError::NotConnected),
-            Some(r) => match r.expect("join error") {
+        tokio::select! {
+            _ = &mut head_start, if !others_started => {
+                others_started = true;
+                for &addr in &others {
+                    joinset.spawn_local(connect(addr, cert.clone()));
+                }
+            }
+            Some(r) = joinset.join_next() => match r.expect("join error") {
                 Ok(conn) => return Ok(conn),
                 Err((a, e)) => {
-                    log::warn!("failed to connect to {a}: `{e}`")
+                    log::warn!("failed to connect to {a}: `{e}`");
+                    // every local address failed: no need to wait any longer
+                    if joinset.is_empty() && !others_started {
+                        head_start.as_mut().reset(tokio::time::Instant::now());
+                    }
                 }
             },
-        };
+            else => return Err(LanMouseConnectionError::NotConnected),
+        }
     }
 }
 
@@ -307,4 +341,30 @@ async fn disconnect(
     client_manager.set_peer_commit(handle, None);
     let active: Vec<SocketAddr> = conns.lock().await.keys().copied().collect();
     log::info!("active connections: {active:?}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lan(addr: &str) -> bool {
+        is_lan(&SocketAddr::new(addr.parse().unwrap(), DEFAULT_PORT))
+    }
+
+    #[test]
+    fn local_network_addresses_count_as_lan() {
+        assert!(lan("192.168.45.164"));
+        assert!(lan("10.0.0.2"));
+        assert!(lan("169.254.10.1"));
+        assert!(lan("fe80::1"));
+    }
+
+    #[test]
+    fn vpn_and_public_addresses_do_not() {
+        // Tailscale uses the shared address space 100.64.0.0/10
+        assert!(!lan("100.119.187.125"));
+        assert!(!lan("218.38.137.27"));
+        assert!(!lan("fd7a:115c:a1e0::1"));
+        assert!(!lan("2001:db8::1"));
+    }
 }
