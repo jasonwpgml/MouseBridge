@@ -285,7 +285,7 @@ impl From<Status> for bool {
 }
 
 #[cfg(unix)]
-const LAN_MOUSE_SOCKET_NAME: &str = "lan-mouse-socket.sock";
+const LAN_MOUSE_SOCKET_NAME: &str = "mousebridge.sock";
 
 #[derive(Debug, Error)]
 pub enum SocketPathError {

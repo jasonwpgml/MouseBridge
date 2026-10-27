@@ -43,23 +43,39 @@ pub fn local_commit() -> [u8; 8] {
 }
 
 const CONFIG_FILE_NAME: &str = "config.toml";
-const CERT_FILE_NAME: &str = "lan-mouse.pem";
+const CERT_FILE_NAME: &str = "mousebridge.pem";
+const CONFIG_DIR_NAME: &str = "mousebridge";
+/// where Lan Mouse, which MouseBridge is based on, keeps its files
+const LAN_MOUSE_DIR_NAME: &str = "lan-mouse";
+const LAN_MOUSE_CERT_FILE_NAME: &str = "lan-mouse.pem";
 
 fn default_path() -> Result<PathBuf, VarError> {
     #[cfg(unix)]
-    let default_path = {
-        let xdg_config_home =
-            env::var("XDG_CONFIG_HOME").unwrap_or(format!("{}/.config", env::var("HOME")?));
-        format!("{xdg_config_home}/lan-mouse/")
-    };
+    let base = env::var("XDG_CONFIG_HOME").unwrap_or(format!("{}/.config", env::var("HOME")?));
 
     #[cfg(not(unix))]
-    let default_path = {
-        let app_data =
-            env::var("LOCALAPPDATA").unwrap_or(format!("{}/.config", env::var("USERPROFILE")?));
-        format!("{app_data}\\lan-mouse\\")
+    let base = env::var("LOCALAPPDATA").unwrap_or(format!("{}/.config", env::var("USERPROFILE")?));
+
+    Ok(PathBuf::from(base).join(CONFIG_DIR_NAME))
+}
+
+/// Copies a Lan Mouse config and certificate into `dir` when it has no config
+/// yet, so devices that trust this one keep recognizing it.
+fn import_lan_mouse_config(dir: &Path) -> io::Result<()> {
+    let Some(old) = dir.parent().map(|p| p.join(LAN_MOUSE_DIR_NAME)) else {
+        return Ok(());
     };
-    Ok(PathBuf::from(default_path))
+    if dir.join(CONFIG_FILE_NAME).exists() || !old.join(CONFIG_FILE_NAME).exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(dir)?;
+    fs::copy(old.join(CONFIG_FILE_NAME), dir.join(CONFIG_FILE_NAME))?;
+    let old_cert = old.join(LAN_MOUSE_CERT_FILE_NAME);
+    if old_cert.exists() && !dir.join(CERT_FILE_NAME).exists() {
+        fs::copy(old_cert, dir.join(CERT_FILE_NAME))?;
+    }
+    log::info!("imported the Lan Mouse configuration from {old:?}");
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -353,6 +369,12 @@ const DEFAULT_RELEASE_KEYS: [scancode::Linux; 4] =
 impl Config {
     pub fn new() -> Result<Self, ConfigError> {
         let args = Args::parse();
+
+        if args.config.is_none() {
+            if let Err(e) = import_lan_mouse_config(&default_path()?) {
+                log::warn!("could not import the Lan Mouse configuration: {e}");
+            }
+        }
 
         // --config <file> overrules default location
         let config_path = args
@@ -648,5 +670,27 @@ KeyF18 = "KeyHanguel"
         let doc = written.parse::<DocumentMut>().unwrap();
         let reread: ConfigToml = toml_edit::de::from_document(doc).unwrap();
         assert_eq!(reread, config);
+    }
+
+    #[test]
+    fn imports_lan_mouse_config_once() {
+        let base = env::temp_dir().join(format!("mousebridge-import-{}", std::process::id()));
+        let (old, new) = (base.join(LAN_MOUSE_DIR_NAME), base.join(CONFIG_DIR_NAME));
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join(CONFIG_FILE_NAME), "port = 4242\n").unwrap();
+        fs::write(old.join(LAN_MOUSE_CERT_FILE_NAME), "cert").unwrap();
+
+        import_lan_mouse_config(&new).unwrap();
+        assert_eq!(
+            fs::read_to_string(new.join(CERT_FILE_NAME)).unwrap(),
+            "cert"
+        );
+
+        // an existing MouseBridge config is left alone
+        fs::write(new.join(CONFIG_FILE_NAME), "port = 5000\n").unwrap();
+        import_lan_mouse_config(&new).unwrap();
+        let config = fs::read_to_string(new.join(CONFIG_FILE_NAME)).unwrap();
+        fs::remove_dir_all(&base).unwrap();
+        assert_eq!(config, "port = 5000\n");
     }
 }

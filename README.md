@@ -1,532 +1,65 @@
-# Lan Mouse
+# MouseBridge
 
-[![CI](https://github.com/feschber/lan-mouse/actions/workflows/rust.yml/badge.svg)](https://github.com/feschber/lan-mouse/actions/workflows/rust.yml) [![Cachix](https://github.com/feschber/lan-mouse/actions/workflows/cachix.yml/badge.svg)](https://github.com/feschber/lan-mouse/actions/workflows/cachix.yml) [![Release](https://github.com/feschber/lan-mouse/actions/workflows/release.yml/badge.svg)](https://github.com/feschber/lan-mouse/actions/workflows/release.yml)
+맥 한 대와 Windows PC 여러 대를 마우스·키보드 하나로 같이 쓰는 프로그램이에요.
+[Lan Mouse](https://github.com/feschber/lan-mouse)를 바탕으로, 맥과 Windows를 오갈 때
+불편한 점을 고쳐 나가고 있어요.
 
-[![crates.io](https://img.shields.io/crates/v/lan-mouse.svg)](https://crates.io/crates/lan-mouse)  [![license](https://img.shields.io/crates/l/lan-mouse.svg)](https://github.com/feschber/lan-mouse/blob/main/Cargo.toml)
+Share one mouse and keyboard between a Mac and Windows PCs. Based on Lan Mouse.
 
-Lan Mouse is a *cross-platform* mouse and keyboard sharing software similar to universal-control on Apple devices.
-It allows for using multiple PCs via a single set of mouse and keyboard.
-This is also known as a Software KVM switch.
+## Lan Mouse와 다른 점
 
-Goal of this project is to be an open-source alternative to proprietary tools like [Synergy 2/3](https://symless.com/synergy), [Share Mouse](https://www.sharemouse.com/de/)
-and other open source tools like [Deskflow](https://github.com/deskflow/deskflow) or [Input Leap](https://github.com/input-leap) (Synergy fork).
+- **Cmd↔Ctrl, 한/영 키**: 기기마다 키를 바꿔 보낼 수 있어요. 맥의 Cmd+C/V가 Windows에서
+  Ctrl+C/V로, 오른쪽 Cmd가 한/영 전환으로 동작해요. Windows에서는 한/영·한자 키를 가상 키로
+  보내서 키보드 종류와 상관없이 IME가 바뀌어요.
+- **두 번째 커서 (Windows, 실험 중)**: 맥에서 넘어온 마우스가 자기 커서를 따로 가져요. 기기
+  이름이 붙은 색깔 화살표로 보이고, 데스크톱 마우스는 원래 커서를 그대로 써요.
+- **모니터 크기가 다른 Windows**: 키가 다른 모니터를 나란히 둬도 각 모니터의 빈 가장자리로
+  넘어갈 수 있어요.
+- **연결 끊김 수정 (Windows)**: 한 번 연결이 끊기면 다시 받지 못하던 문제를 고쳤어요
+  ([lan-mouse#262](https://github.com/feschber/lan-mouse/issues/262)).
+- **설치 스크립트**: 맥에서 한 번 실행하면 Windows PC에 붙여넣을 명령까지 만들어 줘요.
+  로그인할 때 창 없이 자동으로 켜져요.
 
-Focus lies on performance, ease of use and a maintainable implementation that can be expanded to support additional backends for e.g. Android, iOS, ... in the future.
+## 설치
 
-***blazingly fast™*** because it's written in rust.
-
-- _Now with a gtk frontend_
-
-<picture>
-    <source media="(prefers-color-scheme: dark)" srcset="/screenshots/dark.png?raw=true">
-    <source media="(prefers-color-scheme: light)" srcset="/screenshots/light.png?raw=true">
-    <img alt="Screenshot of Lan-Mouse" srcset="/screenshots/dark.png">
-</picture>
-
-
-## Encryption
-
-Lan Mouse encrypts all network traffic using the DTLS implementation provided by [WebRTC.rs](https://github.com/webrtc-rs/webrtc).
-There are currently no mitigations in place for timing side-channel attacks.
-
-## OS Support
-
-Most current desktop environments and operating systems are fully supported, this includes
-- GNOME >= 45
-- KDE Plasma >= 6.1
-- Most wlroots based compositors, including Sway (>= 1.8), Hyprland and Wayfire
-- Windows
-- MacOS
-
-
-### Caveats / Known Issues
-
-> [!Important]
-> - **X11** currently only has support for input emulation, i.e. can only be used on the receiving end.
->
-> - **Sway / wlroots**: Wlroots based compositors without libei support on the receiving end currently do not handle modifier events on the client side.
-> This results in CTRL / SHIFT / ALT / SUPER keys not working with a sending device that is NOT using the `layer-shell` backend
->
-> - **Wayfire**: If you are using [Wayfire](https://github.com/WayfireWM/wayfire), make sure to use a recent version (must be newer than October 23rd) and **add `shortcuts-inhibit` to the list of plugins in your wayfire config!**
-> Otherwise input capture will not work.
->
-> - **Windows**: The mouse cursor will be invisible when sending input to a Windows system if
-> there is no real mouse connected to the machine.
-
-For more detailed information about os support see [Detailed OS Support](#detailed-os-support)
-
-### Android & IOS
-
-A proof of concept for an Android / IOS Application by [rohitsangwan01](https://github.com/rohitsangwan01) can be found [here](https://github.com/rohitsangwan01/lan-mouse-mobile).
-It can be used as a remote control for any device supported by Lan Mouse.
-
-## Installation
-
-<details>
-    <summary>Arch Linux</summary>
-
-Lan Mouse can be installed from the [official repositories](https://archlinux.org/packages/extra/x86_64/lan-mouse/):
+맥에서:
 
 ```sh
-pacman -S lan-mouse
+bash <(curl -fsSL https://raw.githubusercontent.com/jasonwpgml/MouseBridge/main/scripts/setup-mac.sh) DESKTOP-ABC:top LAPTOP-XYZ:right
 ```
 
-The prerelease version (following `main`) is available on the AUR:
+`이름:위치`는 Windows PC 이름과, 맥 화면 기준 그 PC가 있는 쪽(left/right/top/bottom)이에요.
+스크립트가 PC마다 PowerShell 명령을 클립보드에 넣어 주니, 그 PC에서 붙여넣으면 돼요.
+Lan Mouse를 쓰고 있었다면 설정과 인증서를 그대로 가져와요.
 
-```sh
-paru -S lan-mouse-git
-```
-</details>
+설정 파일은 맥은 `~/.config/mousebridge/config.toml`, Windows는
+`%LOCALAPPDATA%\mousebridge\config.toml`에 있어요.
 
-
-<details>
-    <summary>Nix (OS)</summary>
-
-- nixpkgs: [search.nixos.org](https://search.nixos.org/packages?channel=unstable&show=lan-mouse&from=0&size=50&sort=relevance&type=packages&query=lan-mouse)
-- flake: [README.md](./nix/README.md)
-</details>
-
-<details>
-    <summary>Fedora</summary>
-You can install Lan Mouse from the [Terra Repository](https://terra.fyralabs.com).
-
-
-After enabling Terra:
-
-```sh
-dnf install lan-mouse
-```
-</details>
-
-<details>
-    <summary>MacOS</summary>
-
-- Download the package for your Mac (Intel or ARM) from the releases page
-- Unzip it
-- Remove the quarantine with `xattr -rd com.apple.quarantine "Lan Mouse.app"`
-- Launch the app
-- Use the menu bar item to open the settings window or quit Lan Mouse. Bundled macOS builds run as a menu bar app and do not keep a Dock icon visible.
-- Grant accessibility permissions in System Preferences
-
-</details>
-
-<details>
-    <summary>Windows</summary>
-
-Lan Mouse can be installed from the [winget community repositories](https://github.com/microsoft/winget-pkgs/tree/master/manifests/f/feschber/LanMouse):
-
-```sh
-winget install lan-mouse
-```
-
-</details>
-
-<details>
-    <summary>Manual Installation</summary>
-
-First make sure to [install the necessary dependencies](#installing-dependencies-for-development--compiling-from-source).
-
-Precompiled release binaries for Windows, MacOS and Linux are available in the [releases section](https://github.com/feschber/lan-mouse/releases).
-For Windows, the depenedencies are included in the .zip file, for other operating systems see [Installing Dependencies](#installing-dependencies-for-development--compiling-from-source).
-
-Alternatively, the `lan-mouse` binary can be compiled from source (see below).
-
-### Installing desktop file, app icon and firewall rules (optional)
-```sh
-# install lan-mouse (replace path/to/ with the correct path)
-sudo cp path/to/lan-mouse /usr/local/bin/
-
-# install app icon
-sudo mkdir -p /usr/local/share/icons/hicolor/scalable/apps
-sudo cp lan-mouse-gtk/resources/de.feschber.LanMouse.svg /usr/local/share/icons/hicolor/scalable/apps
-
-# update icon cache
-gtk-update-icon-cache /usr/local/share/icons/hicolor/
-
-# install desktop entry
-sudo mkdir -p /usr/local/share/applications
-sudo cp de.feschber.LanMouse.desktop /usr/local/share/applications
-
-# when using firewalld: install firewall rule
-sudo cp firewall/lan-mouse.xml /etc/firewalld/services
-# -> enable the service in firewalld settings
-```
-
-Instead of downloading from the releases, the `lan-mouse` binary
-can be easily compiled via cargo or nix:
-
-### Compiling and installing manually:
-```sh
-# compile in release mode
-cargo build --release
-
-# install lan-mouse
-sudo cp target/release/lan-mouse /usr/local/bin/
-```
-
-### Compiling and installing via cargo:
-```sh
-# will end up in ~/.cargo/bin
-cargo install lan-mouse
-```
-
-### Compiling and installing via nix:
-```sh
-# you can find the executable in result/bin/lan-mouse
-nix-build
-```
-### Conditional compilation
-Support for other platforms is omitted automatically based on the active
-rust toolchain.
-
-Additionally, available backends and frontends can be configured manually via
-[cargo features](https://doc.rust-lang.org/cargo/reference/features.html).
-
-E.g. if only support for sway is needed, the following command produces
-an executable with support for only the `layer-shell` capture backend
-and `wlroots` emulation backend:
-```sh
-cargo build --no-default-features --features layer_shell_capture,wlroots_emulation
-```
-For a detailed list of available features, checkout the [Cargo.toml](./Cargo.toml)
-</details>
-
-
-
-## Development
-
-### Git pre-commit hook
-
-This repository includes a local git hooks directory `.githooks/` with a `pre-commit` script that enforces formatting, lints, and tests before allowing a commit.  It is optional to enable it, but it will prevent you from committing code with failing unit tests or that needs clippy/fmt fixes. To enable the hook locally:
-
-1. Make the hook executable:
-
-```sh
-chmod +x .githooks/pre-commit
-```
-
-2. Point git to the hooks directory (one-time per clone):
-
-```sh
-git config core.hooksPath .githooks
-```
-
-The `pre-commit` script runs `cargo fmt --all` (and fails if files were modified), `cargo clippy --workspace --all-targets --all-features -- -D warnings`, and `cargo test --workspace --all-features`.
-
-### Dependencies & Compiling from Source
-<details>
-    <summary>MacOS</summary>
-
-```sh
-# Install dependencies
-brew install libadwaita pkg-config imagemagick
-cargo install cargo-bundle
-# Create the macOS icon file
-scripts/makeicns.sh
-# Create the .app bundle
-cargo bundle
-# Copy all dynamic libraries into the bundle, and update the bundle to find them there
-scripts/copy-macos-dylib.sh
-```
-</details>
-
-<details>
-    <summary>Ubuntu and derivatives</summary>
-
-```sh
-sudo apt install libadwaita-1-dev libgtk-4-dev libx11-dev libxtst-dev
-```
-</details>
-
-<details>
-    <summary>Arch and derivatives</summary>
-
-```sh
-sudo pacman -S libadwaita gtk libx11 libxtst
-```
-</details>
-
-<details>
-    <summary>Fedora and derivatives</summary>
-
-```sh
-sudo dnf install libadwaita-devel libXtst-devel libX11-devel
-```
-</details>
-<details>
-    <summary>Nix</summary>
-
-```sh
-nix-shell .
-```
-</details>
-<details>
-    <summary>Nix (flake)</summary>
-
-```sh
-nix develop
-```
-</details>
-
-<details>
-    <summary>Windows</summary>
-
-- First install [Rust](https://www.rust-lang.org/tools/install).
-
-- Then follow the instructions at [gtk-rs.org](https://gtk-rs.org/gtk4-rs/stable/latest/book/installation_windows.html)
-
-*TLDR:*
-
-Build gtk from source
-
-- The following commands should be run in an **admin power shell** instance:
-```sh
-# install chocolatey
-Set-ExecutionPolicy Bypass -Scope Process -Force; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-
-# install gvsbuild dependencies
-choco install python git msys2 visualstudio2022-workload-vctools
-```
-
-- The following commands should be run in a **regular power shell** instance:
-
-```sh
-# install gvsbuild with python
-python -m pip install --user pipx
-python -m pipx ensurepath
-```
-
-- Relaunch your powershell instance so the changes in the environment are reflected.
-```sh
-pipx install gvsbuild
-
-# build gtk + libadwaita
-gvsbuild build gtk4 libadwaita librsvg adwaita-icon-theme
-```
-
-- **Make sure to add the directory** `C:\gtk-build\gtk\x64\release\bin`
-[**to the `PATH` environment variable**]((https://learn.microsoft.com/en-us/previous-versions/office/developer/sharepoint-2010/ee537574(v=office.14))). Otherwise the project will fail to build.
-
-To avoid building GTK from source, it is possible to disable
-the gtk frontend (see conditional compilation).
-</details>
-
-## Usage
-<details>
-    <summary>Gtk Frontend</summary>
-
-By default the gtk frontend will open when running `lan-mouse`.
-
-To connect a device you want to control, simply click the `Add` button and enter the hostname
-of the device.
-
-On the *remote* device, authorize your *local* device for incoming traffic using the `Authorize` button
-under the "Incoming Connections" section.
-The fingerprint for authorization can be found under the general section of your *local* device.
-It is of the form "aa:bb:cc:..."
-
-Authorized devices can be persisted using the configuration file (see [Configuration](#configuration)).
-
-If the device still can not be entered, make sure you have UDP port `4242` (or the one selected) opened up in your firewall.
-</details>
-
-<details>
-    <summary>Command Line Interface</summary>
-
-The cli interface can be accessed by passing `cli` as a commandline argument.
-Use
-```sh
-lan-mouse cli help
-```
- to list the available commands and
-```sh
-lan-mouse cli <cmd> help
-```
-for information on how to use a specific command.
-
-</details>
-
-<details>
-    <summary>Daemon Mode</summary>
-
-Lan Mouse can be launched in daemon mode to keep it running in the background (e.g. for use in a systemd-service).
-
-To do so, use the `daemon` subcommand:
-
-```sh
-lan-mouse daemon
-```
-</details>
-
-## Systemd Service
-
-In order to start lan-mouse with a graphical session automatically,
-the [systemd-service](service/lan-mouse.service) can be used:
-
-Copy the file to `~/.config/systemd/user/` and enable the service:
-
-```sh
-cp service/lan-mouse.service ~/.config/systemd/user
-systemctl --user daemon-reload
-systemctl --user enable --now lan-mouse.service
-```
-> [!Important]
-> Make sure to point `ExecStart=/usr/bin/lan-mouse daemon` to the actual `lan-mouse` binary (in case it is not under `/usr/bin`, e.g. when installed manually.
-
-
-## Configuration
-To automatically load clients on startup, the file `$XDG_CONFIG_HOME/lan-mouse/config.toml` is parsed.
-`$XDG_CONFIG_HOME` defaults to `~/.config/`.
-
-To create this file you can copy the following example config:
-
-### Example config
-> [!TIP]
-> key symbols in the release bind are named according
-> to their names in [input-event/src/scancode.rs#L172](input-event/src/scancode.rs#L176).
-> This is bound to change
+## 설정
 
 ```toml
-# example configuration
+# 맥에서 넘어온 마우스를 두 번째 커서로 보여 줘요 (Windows)
+second_cursor = true
 
-# configure release bind
-release_bind = [ "KeyA", "KeyS", "KeyD", "KeyF" ]
-
-# optional port (defaults to 4242)
-port = 4242
-
-# list of authorized tls certificate fingerprints that
-# are accepted for incoming traffic
-[authorized_fingerprints]
-"bc:05:ab:7a:a4:de:88:8c:2f:92:ac:bc:b8:49:b8:24:0d:44:b3:e6:a4:ef:d7:0b:6c:69:6d:77:53:0b:14:80" = "iridium"
-
-# define a client on the right side with host name "iridium"
 [[clients]]
-# position (left | right | top | bottom)
-position = "right"
-# hostname
-hostname = "iridium"
-# activate this client immediately when lan-mouse is started
+hostname = "DESKTOP-ABC"
+position = "top"
 activate_on_startup = true
-# optional list of (known) ip addresses
-ips = ["192.168.178.156"]
 
-# define a client on the left side with IP address 192.168.178.189
-[[clients]]
-position = "left"
-# The hostname is optional: When no hostname is specified,
-# at least one ip address needs to be specified.
-hostname = "thorium"
-# ips for ethernet and wifi
-ips = ["192.168.178.189", "192.168.178.172"]
-# optional port
-port = 4242
-```
-
-Where `left` can be either `left`, `right`, `top` or `bottom`.
-
-### Key remapping
-Keys sent to a client can be remapped per client, keyed by the client's `hostname`
-(case-insensitive). Remapping a modifier key also remaps its modifier state.
-Key names are the same as for the release bind.
-
-```toml
-# Mac -> Windows: Cmd acts as Ctrl and vice versa,
-# F18 (e.g. right Cmd remapped by Karabiner) toggles the Korean IME
-[key_remap.iridium]
+# 이 기기로 보내는 키 바꾸기
+[key_remap."DESKTOP-ABC"]
 KeyLeftMeta = "KeyLeftCtrl"
 KeyLeftCtrl = "KeyLeftMeta"
-KeyRightmeta = "KeyRightCtrl"
-KeyRightCtrl = "KeyRightmeta"
 KeyF18 = "KeyHanguel"
 ```
 
-On Windows, `KeyHanguel` and `KeyHanja` are emulated as the `VK_HANGUL` and
-`VK_HANJA` virtual keys so they toggle the IME regardless of keyboard type.
+나머지 설정과 빌드 방법은 [Lan Mouse 문서](docs/LAN_MOUSE_README.md)와 같아요.
 
-#### Mac + Windows setup scripts
-`scripts/setup-mac.sh` installs the latest release on a Mac and writes the
-config above for each Windows PC, given as `HOST:POSITION[:IP]`:
+## 만든 사람과 라이선스
 
-```sh
-bash <(curl -fsSL https://raw.githubusercontent.com/jasonwpgml/lan-mouse/feat/key-remap/scripts/setup-mac.sh) DESKTOP-ABC:top LAPTOP-XYZ:right
-```
+Made by JSonJh (https://github.com/jasonwpgml)
 
-Run it while the previous KVM tool still works: for each PC it copies a
-PowerShell command running `scripts/setup-windows.ps1` to the clipboard, to be
-pasted there. That command passes the Mac's address and certificate
-fingerprint, so the PC trusts the Mac without an Authorize dialog.
+[Lan Mouse](https://github.com/feschber/lan-mouse) © Ferdinand Schober와 기여자들의 코드를
+바탕으로 해요. 원본과 같은 [GPL-3.0-or-later](LICENSE) 라이선스를 따라요.
 
-### Second cursor (Windows, experimental)
-With `second_cursor = true` at the top of the config, a device entering this
-Windows machine moves a cursor of its own, drawn in color and labelled with
-the client's `hostname` (or its address), while the local mouse keeps the
-system cursor. For clicks, scrolling and drags the system cursor jumps to the
-second cursor and returns afterwards. Moving the second cursor past the edge
-facing the device sends it back.
-
-Windows has a single keyboard focus, so typing still goes to the window that
-was clicked last, by either cursor.
-
-## Roadmap
-- [x] Graphical frontend (gtk + libadwaita)
-- [x] respect xdg-config-home for config file location.
-- [x] IP Address switching
-- [x] Liveness tracking Automatically ungrab mouse when client unreachable
-- [x] Liveness tracking: Automatically release keys, when server offline
-- [x] MacOS KeyCode Translation
-- [x] Libei Input Capture
-- [x] MacOS Input Capture
-- [x] Windows Input Capture
-- [x] Encryption
-- [ ] X11 Input Capture
-- [ ] Latency measurement and visualization
-- [ ] Bandwidth usage measurement and visualization
-- [ ] Clipboard support
-
-
-## Detailed OS Support
-
-In order to use a device for sending events, an **input-capture** backend is required, while receiving events requires
-a supported **input-emulation** *and* **input-capture** backend.
-
-A suitable backend is chosen automatically based on the active desktop environment / compositor.
-
-The following sections detail the emulation and capture backends provided by lan-mouse and their support in desktop environments / operating systems.
-
-### Input Emulation Support
-
-| Desktop / Backend         | wlroots                  | libei                    | remote-desktop portal    | windows                  |   macos                                | x11                |
-|---------------------------|--------------------------|--------------------------|--------------------------|--------------------------|----------------------------------------|--------------------|
-| Wayland (wlroots)         | :heavy_check_mark:       |                          |                          |                          |                                        |                    |
-| Wayland (KDE)             |                          | :heavy_check_mark:       | :heavy_check_mark:       |                          |                                        |                    |
-| Wayland (Gnome)           |                          | :heavy_check_mark:       | :heavy_check_mark:       |                          |                                        |                    |
-| Windows                   |                          |                          |                          | :heavy_check_mark:       |                                        |                    |
-| MacOS                     |                          |                          |                          |                          |   :heavy_check_mark:                   |                    |
-| X11                       |                          |                          |                          |                          |                                        | :heavy_check_mark: |
-
-- `wlroots`: This backend makes use of the [wlr-virtual-pointer-unstable-v1](https://wayland.app/protocols/wlr-virtual-pointer-unstable-v1) and [virtual-keyboard-unstable-v1](https://wayland.app/protocols/virtual-keyboard-unstable-v1) protocols and is supported by most wlroots based compositors.
-- `libei`: This backend uses [libei](https://gitlab.freedesktop.org/libinput/libei) and is supported by GNOME >= 45 or KDE Plasma >= 6.1.
-- `xdp`: This backend uses the [freedesktop remote-desktop-portal](https://flatpak.github.io/xdg-desktop-portal/#gdbus-org.freedesktop.portal.RemoteDesktop) and is supported on GNOME and Plasma.
-- `x11`: Backend for X11 sessions.
-- `windows`: Backend for Windows.
-- `macos`: Backend for MacOS.
-
-
-
-### Input Capture Support
-
-| Desktop / Backend         | layer-shell              | libei                    | windows                  |   macos                                | x11 |
-|---------------------------|--------------------------|--------------------------|--------------------------|----------------------------------------|-----|
-| Wayland (wlroots)         | :heavy_check_mark:       |                          |                          |                                        |     |
-| Wayland (KDE)             | :heavy_check_mark:       | :heavy_check_mark:       |                          |                                        |     |
-| Wayland (Gnome)           |                          | :heavy_check_mark:       |                          |                                        |     |
-| Windows                   |                          |                          | :heavy_check_mark:       |                                        |     |
-| MacOS                     |                          |                          |                          |   :heavy_check_mark:                   |     |
-| X11                       |                          |                          |                          |                                        | WIP |
-
-- `layer-shell`: This backend creates a single pixel wide window on the edges of Displays to capture the cursor using the [layer-shell protocol](https://wayland.app/protocols/wlr-layer-shell-unstable-v1).
-- `libei`: This backend uses [libei](https://gitlab.freedesktop.org/libinput/libei) and is supported by GNOME >= 45 or KDE Plasma >= 6.1.
-- `windows`: Backend for input capture on Windows.
-- `macos`: Backend for input capture on MacOS.
-- `x11`: TODO (not yet supported)
+[//]: # (fd2b31e3ef52)

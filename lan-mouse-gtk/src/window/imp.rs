@@ -161,14 +161,14 @@ impl Window {
                 log::info!("capture row clicked in relaunch-required state");
                 let Some(app) = self.obj().application() else {
                     log::error!("failed to relaunch: window has no application");
-                    self.obj().show_toast("Failed to relaunch Lan Mouse");
+                    self.obj().show_toast("Failed to relaunch MouseBridge");
                     return;
                 };
                 match macos_privacy::relaunch_bundle() {
                     Ok(()) => app.quit(),
                     Err(error) => {
                         log::error!("failed to schedule app relaunch: {error}");
-                        self.obj().show_toast("Failed to relaunch Lan Mouse");
+                        self.obj().show_toast("Failed to relaunch MouseBridge");
                     }
                 }
                 return;

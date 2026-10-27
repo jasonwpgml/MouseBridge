@@ -17,12 +17,17 @@ exclude = ["vendor"]
 webrtc-util = { path = "vendor/webrtc-util" }
 
 [package]
-name = "lan-mouse"
-description = "Software KVM Switch / mouse & keyboard sharing software for Local Area Networks"
-version = "0.11.0"
+name = "mousebridge"
+description = "Share one mouse and keyboard between a Mac and Windows PCs, based on Lan Mouse"
+version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/feschber/lan-mouse"
+repository = "https://github.com/jasonwpgml/MouseBridge"
+
+# the library keeps the name of Lan Mouse, which this is based on
+[lib]
+name = "lan_mouse"
+path = "src/lib.rs"
 
 [profile.release]
 codegen-units = 1
@@ -99,9 +104,9 @@ x11_emulation = ["input-emulation/x11"]
 rdp_emulation = ["input-emulation/remote_desktop_portal"]
 
 [package.metadata.bundle]
-name = "Lan Mouse"
+name = "MouseBridge"
 icon = ["target/icon.icns", "lan-mouse-gtk/resources/de.feschber.LanMouse.svg"]
-identifier = "de.feschber.LanMouse"
+identifier = "io.github.jasonwpgml.MouseBridge"
 deb_depends = [ "libadwaita-1-0" ]
 resources = ["target/menubar-template.png"]
 

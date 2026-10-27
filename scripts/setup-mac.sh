@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installs this fork's Lan Mouse on a Mac and sets up the Windows PCs next to it.
+# Installs MouseBridge on a Mac and sets up the Windows PCs next to it.
 #
 #   setup-mac.sh [--repo OWNER/NAME] [--tag TAG] HOST:POSITION[:IP]...
 #
@@ -11,9 +11,9 @@
 # command to the clipboard to paste there, then replaces Deskflow on the Mac.
 set -euo pipefail
 
-REPO=jasonwpgml/lan-mouse
+REPO=jasonwpgml/MouseBridge
 TAG=
-SCRIPT_REF=feat/key-remap
+SCRIPT_REF=main
 CLIENTS=()
 while [ $# -gt 0 ]; do
     case $1 in
@@ -68,10 +68,10 @@ opposite() {
 
 # --- install -------------------------------------------------------------
 
-step "Lan Mouse 내려받기"
+step "MouseBridge 내려받기"
 case $(uname -m) in
-    arm64) ASSET=lan-mouse-macos-arm64.zip ;;
-    *) ASSET=lan-mouse-macos-intel.zip ;;
+    arm64) ASSET=mousebridge-macos-arm64.zip ;;
+    *) ASSET=mousebridge-macos-intel.zip ;;
 esac
 if [ -n "$TAG" ]; then
     API="https://api.github.com/repos/$REPO/releases/tags/$TAG"
@@ -87,27 +87,39 @@ echo "$URL"
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
-curl -fL --progress-bar -o "$TMP/lan-mouse.zip" "$URL"
-ditto -x -k "$TMP/lan-mouse.zip" "$TMP"
+curl -fL --progress-bar -o "$TMP/mousebridge.zip" "$URL"
+ditto -x -k "$TMP/mousebridge.zip" "$TMP"
 
-pkill -f "Lan Mouse.app/Contents/MacOS/lan-mouse" 2>/dev/null || true
-if [ -w /Applications ]; then APP="/Applications/Lan Mouse.app"; else APP="$HOME/Applications/Lan Mouse.app"; fi
+# stop MouseBridge and Lan Mouse, which it replaces
+for exe in "MouseBridge.app/Contents/MacOS/mousebridge" "Lan Mouse.app/Contents/MacOS/lan-mouse"; do
+    pkill -f "$exe" 2>/dev/null || true
+done
+if [ -w /Applications ]; then APP="/Applications/MouseBridge.app"; else APP="$HOME/Applications/MouseBridge.app"; fi
 mkdir -p "$(dirname "$APP")"
 rm -rf "$APP"
-ditto "$TMP/Lan Mouse.app" "$APP"
+ditto "$TMP/MouseBridge.app" "$APP"
 echo "설치: $APP"
 
 # --- certificate -----------------------------------------------------------
 
-CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/lan-mouse"
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/mousebridge"
 CONF="$CONF_DIR/config.toml"
-CERT="$CONF_DIR/lan-mouse.pem"
+CERT="$CONF_DIR/mousebridge.pem"
 mkdir -p "$CONF_DIR"
+# keep the Lan Mouse certificate, so devices that trust this Mac still do
+LAN_MOUSE_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/lan-mouse"
+if [ ! -f "$CONF" ] && [ -f "$LAN_MOUSE_DIR/config.toml" ]; then
+    cp "$LAN_MOUSE_DIR/config.toml" "$CONF"
+    if [ -f "$LAN_MOUSE_DIR/lan-mouse.pem" ] && [ ! -f "$CERT" ]; then
+        cp "$LAN_MOUSE_DIR/lan-mouse.pem" "$CERT"
+    fi
+    echo "Lan Mouse 설정과 인증서를 가져왔어요."
+fi
 if [ ! -s "$CERT" ]; then
     # the daemon creates the certificate before anything else; give it an
     # empty config so it doesn't reach for any screen edge meanwhile
     mkdir -p "$TMP/cfg"
-    XDG_CONFIG_HOME="$TMP/cfg" "$APP/Contents/MacOS/lan-mouse" --cert-path "$CERT" daemon >/dev/null 2>&1 &
+    XDG_CONFIG_HOME="$TMP/cfg" "$APP/Contents/MacOS/mousebridge" --cert-path "$CERT" daemon >/dev/null 2>&1 &
     pid=$!
     for _ in $(seq 50); do [ -s "$CERT" ] && break; sleep 0.1; done
     kill "$pid" 2>/dev/null || true
@@ -184,16 +196,17 @@ echo "설정: $CONF"
 
 # every build is ad-hoc signed, so a grant for the previous build no longer
 # applies even though System Settings still shows it switched on
-tccutil reset All de.feschber.LanMouse >/dev/null 2>&1 || true
+tccutil reset All io.github.jasonwpgml.MouseBridge >/dev/null 2>&1 || true
 open "$APP"
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 
 # start with every login; macOS may ask to let Terminal control System Events
-if ! osascript -e "tell application \"System Events\" to if not (exists login item \"Lan Mouse\") then make login item at end with properties {path:\"$APP\", hidden:true}" >/dev/null 2>&1; then
-    echo "로그인 항목 추가에 실패했어요 — 시스템 설정 > 일반 > 로그인 항목에서 Lan Mouse를 추가하세요." >&2
+if ! osascript -e "tell application \"System Events\" to if not (exists login item \"MouseBridge\") then make login item at end with properties {path:\"$APP\", hidden:true}" >/dev/null 2>&1; then
+    echo "로그인 항목 추가에 실패했어요 — 시스템 설정 > 일반 > 로그인 항목에서 MouseBridge를 추가하세요." >&2
 fi
+osascript -e 'tell application "System Events" to if exists login item "Lan Mouse" then delete login item "Lan Mouse"' >/dev/null 2>&1 || true
 
 step "남은 일"
-echo "1. 손쉬운 사용 목록에서 Lan Mouse를 켜고, Lan Mouse를 껐다 켜기"
+echo "1. 손쉬운 사용 목록에서 MouseBridge를 켜고, MouseBridge를 껐다 켜기"
 echo "2. Windows에서 Mac 쪽으로 넘어올 때 Mac에 'Authorize' 창이 뜨면 허용"
 echo "3. Deskflow가 로그인 시 자동 실행되면 Deskflow 설정에서 끄기"

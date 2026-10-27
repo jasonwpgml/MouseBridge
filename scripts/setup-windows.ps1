@@ -1,5 +1,5 @@
 <#
-Installs this fork's Lan Mouse on Windows and points it at a Mac.
+Installs MouseBridge on Windows and points it at a Mac.
 setup-mac.sh prints the full command; by hand:
 
   setup-windows.ps1 -MacName Jason-MacAir -MacIp 192.168.0.10 -Side bottom
@@ -16,7 +16,7 @@ param(
     [ValidateSet('left', 'right', 'top', 'bottom')][string]$Side,
     [string]$MacFingerprint,
     [switch]$SecondCursor,
-    [string]$Repo = 'jasonwpgml/lan-mouse',
+    [string]$Repo = 'jasonwpgml/MouseBridge',
     [string]$Tag
 )
 $ErrorActionPreference = 'Stop'
@@ -37,30 +37,42 @@ if (-not $MacIp) {
     if (-not $MacIp) { $MacIp = Read-Host "Mac($MacName)의 IP를 입력하세요" }
 }
 
-Step 'Lan Mouse 내려받기'
+Step 'MouseBridge 내려받기'
 $api = "https://api.github.com/repos/$Repo/releases?per_page=1"
 if ($Tag) { $api = "https://api.github.com/repos/$Repo/releases/tags/$Tag" }
 $release = @(Invoke-RestMethod $api)[0]
-$asset = $release.assets | Where-Object name -eq 'lan-mouse-windows-x86_64.zip'
-if (-not $asset) { throw "$Repo 릴리스에서 lan-mouse-windows-x86_64.zip 을 찾지 못했어요." }
+$asset = $release.assets | Where-Object name -eq 'mousebridge-windows-x86_64.zip'
+if (-not $asset) { throw "$Repo 릴리스에서 mousebridge-windows-x86_64.zip 을 찾지 못했어요." }
 Write-Host $asset.browser_download_url
 
-$zip = Join-Path $env:TEMP 'lan-mouse-windows-x86_64.zip'
+$zip = Join-Path $env:TEMP 'mousebridge-windows-x86_64.zip'
 Invoke-WebRequest $asset.browser_download_url -OutFile $zip -UseBasicParsing
 
-Get-Process lan-mouse -ErrorAction SilentlyContinue | Stop-Process -Force
+# stop MouseBridge and Lan Mouse, which it replaces
+Get-Process mousebridge, lan-mouse -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 1
-$dir = Join-Path $env:LOCALAPPDATA 'Programs\lan-mouse'
+$dir = Join-Path $env:LOCALAPPDATA 'Programs\mousebridge'
 if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
 Expand-Archive $zip $dir
 Remove-Item $zip
-$exe = Join-Path $dir 'lan-mouse.exe'
+$exe = Join-Path $dir 'mousebridge.exe'
 Write-Host "설치: $dir"
 
 Step '설정'
-$confDir = Join-Path $env:LOCALAPPDATA 'lan-mouse'
+$confDir = Join-Path $env:LOCALAPPDATA 'mousebridge'
 $conf = Join-Path $confDir 'config.toml'
 New-Item -ItemType Directory -Force $confDir | Out-Null
+
+# keep the Lan Mouse config and certificate, so trusted devices still are
+$lanMouseDir = Join-Path $env:LOCALAPPDATA 'lan-mouse'
+if (-not (Test-Path $conf) -and (Test-Path "$lanMouseDir\config.toml")) {
+    Copy-Item "$lanMouseDir\config.toml" $conf
+    $cert = Join-Path $confDir 'mousebridge.pem'
+    if ((Test-Path "$lanMouseDir\lan-mouse.pem") -and -not (Test-Path $cert)) {
+        Copy-Item "$lanMouseDir\lan-mouse.pem" $cert
+    }
+    Write-Host 'Lan Mouse 설정과 인증서를 가져왔어요.'
+}
 
 # keep devices already trusted through the Authorize dialog
 $trusted = [System.Collections.Generic.List[string]]::new()
@@ -106,7 +118,7 @@ Write-Host "설정: $conf"
 
 $shell = New-Object -ComObject WScript.Shell
 # Start menu: the window, for settings and authorizing devices
-$shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'Lan Mouse.lnk'))
+$shortcut = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Programs')) 'MouseBridge.lnk'))
 $shortcut.TargetPath = $exe
 $shortcut.WorkingDirectory = $dir
 $shortcut.Save()
@@ -115,15 +127,19 @@ $shortcut.Save()
 # attaches to a running service and leaves it running when closed.
 $conhost = Join-Path $env:SystemRoot 'System32\conhost.exe'
 $daemonArgs = "--headless `"$exe`" daemon"
-$autostart = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Startup')) 'Lan Mouse.lnk'))
+$autostart = $shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Startup')) 'MouseBridge.lnk'))
 $autostart.TargetPath = $conhost
 $autostart.Arguments = $daemonArgs
 $autostart.WorkingDirectory = $dir
 $autostart.Save()
+
+foreach ($folder in 'Programs', 'Startup') {
+    Remove-Item (Join-Path ([Environment]::GetFolderPath($folder)) 'Lan Mouse.lnk') -ErrorAction SilentlyContinue
+}
 
 Start-Process $conhost -ArgumentList $daemonArgs -WorkingDirectory $dir
 
 Step '남은 일'
 Write-Host "1. 방화벽 창이 뜨면 '개인 네트워크' 허용"
 Write-Host '2. Mac 설정이 끝나면 화면 가장자리로 커서를 넘겨 확인'
-Write-Host '로그인하면 Lan Mouse가 창 없이 자동으로 켜져요. 설정은 시작 메뉴의 Lan Mouse로 열고, 창을 닫아도 계속 동작해요.'
+Write-Host '로그인하면 MouseBridge가 창 없이 자동으로 켜져요. 설정은 시작 메뉴의 MouseBridge로 열고, 창을 닫아도 계속 동작해요.'
