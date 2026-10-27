@@ -8,6 +8,13 @@ members = [
     "lan-mouse-gtk",
     "lan-mouse-proto",
 ]
+exclude = ["vendor"]
+
+# webrtc-util 0.11.0 with webrtc-rs/webrtc#812 backported: on Windows the
+# DTLS listener stopped for good on the first WSAECONNRESET, so the other
+# device could no longer connect (feschber/lan-mouse#262)
+[patch.crates-io]
+webrtc-util = { path = "vendor/webrtc-util" }
 
 [package]
 name = "lan-mouse"
