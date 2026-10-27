@@ -1,14 +1,14 @@
 use crate::config::local_commit;
 use crate::listen::{LanMouseListener, ListenEvent, ListenerCreationError};
 use futures::StreamExt;
-use input_emulation::{EmulationHandle, InputEmulation, InputEmulationError};
+use input_emulation::{Edge, EmulationHandle, InputEmulation, InputEmulationError};
 use input_event::Event;
 use lan_mouse_proto::{Position, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
     cell::Cell,
     collections::HashMap,
-    net::SocketAddr,
+    net::{IpAddr, SocketAddr},
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -53,6 +53,11 @@ pub(crate) enum EmulationEvent {
     EmulationEnabled,
     /// capture should be released
     ReleaseNotify,
+    /// the second cursor of a remote device was pushed against a screen edge
+    CrossedEdge {
+        addr: SocketAddr,
+        pos: lan_mouse_ipc::Position,
+    },
     /// peer sent us a Hello with its build commit hash. Used to
     /// populate `client_manager.peer_commit` from the listen side
     /// too — without this, peer-version visibility silently fails
@@ -74,11 +79,14 @@ enum EmulationRequest {
 }
 
 impl Emulation {
+    /// `second_cursor_labels`: show remote pointers as cursors of their own,
+    /// labelled by address
     pub(crate) fn new(
         backend: Option<input_emulation::Backend>,
         listener: LanMouseListener,
+        second_cursor_labels: Option<HashMap<IpAddr, String>>,
     ) -> Self {
-        let emulation_proxy = EmulationProxy::new(backend);
+        let emulation_proxy = EmulationProxy::new(backend, second_cursor_labels);
         let (request_tx, request_rx) = channel();
         let (event_tx, event_rx) = channel();
         let emulation_task = ListenTask {
@@ -243,7 +251,10 @@ enum ProxyRequest {
 }
 
 impl EmulationProxy {
-    fn new(backend: Option<input_emulation::Backend>) -> Self {
+    fn new(
+        backend: Option<input_emulation::Backend>,
+        second_cursor_labels: Option<HashMap<IpAddr, String>>,
+    ) -> Self {
         let (request_tx, request_rx) = channel();
         let (event_tx, event_rx) = channel();
         let emulation_active = Rc::new(Cell::new(false));
@@ -255,6 +266,7 @@ impl EmulationProxy {
             event_tx,
             handles: Default::default(),
             next_id: 0,
+            second_cursor_labels,
         };
         let task = spawn_local(emulation_task.run());
         Self {
@@ -314,6 +326,7 @@ struct EmulationTask {
     event_tx: Sender<EmulationEvent>,
     handles: HashMap<SocketAddr, EmulationHandle>,
     next_id: EmulationHandle,
+    second_cursor_labels: Option<HashMap<IpAddr, String>>,
 }
 
 impl EmulationTask {
@@ -368,13 +381,27 @@ impl EmulationTask {
         &mut self,
         emulation: &mut InputEmulation,
     ) -> Result<(), InputEmulationError> {
-        for handle in self.handles.values() {
+        for (&addr, &handle) in self.handles.iter() {
             tokio::select! {
-                _ = emulation.create(*handle) => {},
+                _ = emulation.create(handle) => {},
                 _ = wait_for_termination(&mut self.request_rx) => return Ok(()),
+            }
+            if let Some(label) = self.second_cursor_label(addr) {
+                emulation.set_second_cursor(handle, label).await;
             }
         }
         Ok(())
+    }
+
+    /// label of the second cursor for the device at `addr`, if enabled
+    fn second_cursor_label(&self, addr: SocketAddr) -> Option<String> {
+        let labels = self.second_cursor_labels.as_ref()?;
+        Some(
+            labels
+                .get(&addr.ip())
+                .cloned()
+                .unwrap_or_else(|| addr.ip().to_string()),
+        )
     }
 
     async fn do_emulation_session(
@@ -391,11 +418,20 @@ impl EmulationTask {
                                 let handle = self.next_id;
                                 self.next_id += 1;
                                 emulation.create(handle).await;
+                                if let Some(label) = self.second_cursor_label(addr) {
+                                    emulation.set_second_cursor(handle, label).await;
+                                }
                                 self.handles.insert(addr, handle);
                                 handle
                             }
                         };
                         emulation.consume(event, handle).await?;
+                        if let Some(edge) = emulation.take_crossed_edge(handle) {
+                            let pos = to_ipc_pos(edge_position(edge));
+                            self.event_tx
+                                .send(EmulationEvent::CrossedEdge { addr, pos })
+                                .expect("channel closed");
+                        }
                     },
                     ProxyRequest::Remove(addr) => {
                         if let Some(handle) = self.handles.remove(&addr) {
@@ -407,6 +443,15 @@ impl EmulationTask {
                 },
             }
         }
+    }
+}
+
+fn edge_position(edge: Edge) -> Position {
+    match edge {
+        Edge::Left => Position::Left,
+        Edge::Right => Position::Right,
+        Edge::Top => Position::Top,
+        Edge::Bottom => Position::Bottom,
     }
 }
 

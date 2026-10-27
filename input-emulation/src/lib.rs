@@ -32,6 +32,15 @@ mod error;
 
 pub type EmulationHandle = u64;
 
+/// a screen edge
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Edge {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Backend {
     #[cfg(wlroots)]
@@ -204,6 +213,18 @@ impl InputEmulation {
         Ok(())
     }
 
+    /// Moves the handle's pointer as a separate cursor, labelled `label`,
+    /// instead of the system cursor, where the backend supports it.
+    pub async fn set_second_cursor(&mut self, handle: EmulationHandle, label: String) {
+        self.emulation.set_second_cursor(handle, label).await
+    }
+
+    /// The screen edge the handle's second cursor was pushed against since
+    /// the last call, if any.
+    pub fn take_crossed_edge(&mut self, handle: EmulationHandle) -> Option<Edge> {
+        self.emulation.take_crossed_edge(handle)
+    }
+
     pub fn has_pressed_keys(&self, handle: EmulationHandle) -> bool {
         self.pressed_keys
             .get(&handle)
@@ -237,4 +258,8 @@ trait Emulation: Send {
     async fn create(&mut self, handle: EmulationHandle);
     async fn destroy(&mut self, handle: EmulationHandle);
     async fn terminate(&mut self);
+    async fn set_second_cursor(&mut self, _handle: EmulationHandle, _label: String) {}
+    fn take_crossed_edge(&mut self, _handle: EmulationHandle) -> Option<Edge> {
+        None
+    }
 }

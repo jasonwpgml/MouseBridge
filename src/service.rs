@@ -100,7 +100,7 @@ impl Service {
         let capture_backend = config.capture_backend().map(|b| b.into());
         let capture = Capture::new(capture_backend, conn, config.release_bind());
         let emulation_backend = config.emulation_backend().map(|b| b.into());
-        let emulation = Emulation::new(emulation_backend, listener);
+        let emulation = Emulation::new(emulation_backend, listener, config.second_cursor_labels());
 
         // create dns resolver
         let resolver = DnsResolver::new()?;
@@ -317,6 +317,16 @@ impl Service {
                 self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
             }
             EmulationEvent::ReleaseNotify => self.capture.release(),
+            EmulationEvent::CrossedEdge { addr, pos } => {
+                // the second cursor moved back towards the device it came from
+                let towards_device = self
+                    .incoming_conn_info
+                    .values()
+                    .any(|incoming| incoming.addr == addr && incoming.pos == pos);
+                if towards_device {
+                    self.emulation.send_leave_event(addr);
+                }
+            }
             EmulationEvent::Connected { addr, fingerprint } => {
                 self.notify_frontend(FrontendEvent::DeviceConnected { addr, fingerprint });
             }

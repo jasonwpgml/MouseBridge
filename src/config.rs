@@ -69,6 +69,8 @@ struct ConfigToml {
     port: Option<u16>,
     release_bind: Option<Vec<scancode::Linux>>,
     cert_path: Option<PathBuf>,
+    /// show remote pointers as cursors of their own (Windows only)
+    second_cursor: Option<bool>,
     clients: Option<Vec<TomlClient>>,
     authorized_fingerprints: Option<HashMap<String, String>>,
     /// per-client key remapping, keyed by client hostname
@@ -515,6 +517,23 @@ impl Config {
             .map(|(_, map)| KeyRemap::new(map))
     }
 
+    /// With `second_cursor` on, the labels for remote pointers: the hostname
+    /// of the client configured with that address.
+    pub fn second_cursor_labels(&self) -> Option<HashMap<IpAddr, String>> {
+        if !self.config_toml.as_ref()?.second_cursor? {
+            return None;
+        }
+        let mut labels = HashMap::new();
+        for client in self.clients() {
+            if let Some(hostname) = client.hostname {
+                for ip in client.ips {
+                    labels.insert(ip, hostname.clone());
+                }
+            }
+        }
+        Some(labels)
+    }
+
     /// set configured clients
     pub fn set_clients(&mut self, clients: Vec<ConfigClient>) {
         if clients.is_empty() {
@@ -605,6 +624,8 @@ mod tests {
     use super::*;
 
     const KEY_REMAP_TOML: &str = r#"
+second_cursor = true
+
 [key_remap.DESKTOP-SN73G0N]
 KeyLeftMeta = "KeyLeftCtrl"
 KeyF18 = "KeyHanguel"
@@ -616,6 +637,7 @@ KeyF18 = "KeyHanguel"
         let config: ConfigToml = toml_edit::de::from_document(doc).unwrap();
         let remap = &config.key_remap.as_ref().unwrap()["DESKTOP-SN73G0N"];
         assert_eq!(remap[&scancode::Linux::KeyF18], scancode::Linux::KeyHanguel);
+        assert_eq!(config.second_cursor, Some(true));
     }
 
     #[test]

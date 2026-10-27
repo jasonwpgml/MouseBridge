@@ -6,6 +6,8 @@ setup-mac.sh prints the full command; by hand:
 
 -Side is where the Mac's screen sits next to this PC (left|right|top|bottom).
 -MacFingerprint pre-trusts the Mac so no Authorize dialog shows up here.
+-SecondCursor shows the Mac's pointer as a cursor of its own; once set, it
+stays on when the script runs again.
 Keys sent to the Mac swap Ctrl and Win and turn 한/영 (or right Alt) into F18.
 #>
 param(
@@ -13,6 +15,7 @@ param(
     [string]$MacIp,
     [ValidateSet('left', 'right', 'top', 'bottom')][string]$Side,
     [string]$MacFingerprint,
+    [switch]$SecondCursor,
     [string]$Repo = 'jasonwpgml/lan-mouse',
     [string]$Tag
 )
@@ -65,6 +68,7 @@ if (Test-Path $conf) {
     Copy-Item $conf "$conf.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
     $keep = $false
     foreach ($line in Get-Content $conf) {
+        if ($line -match '^second_cursor\s*=\s*true') { $SecondCursor = $true }
         if ($line -match '^\[') {
             $keep = $line -eq '[authorized_fingerprints]'
             continue
@@ -78,6 +82,7 @@ if ($MacFingerprint -and -not ($trusted | Where-Object { $_ -like "*$MacFingerpr
 
 $lines = @(
     '# setup-windows.ps1 가 만든 파일 - 배치를 바꾸려면 스크립트를 다시 실행하세요'
+    "second_cursor = $(if ($SecondCursor) { 'true' } else { 'false' })"
     ''
     '[[clients]]'
     "hostname = `"$MacName`""

@@ -457,6 +457,17 @@ PowerShell command running `scripts/setup-windows.ps1` to the clipboard, to be
 pasted there. That command passes the Mac's address and certificate
 fingerprint, so the PC trusts the Mac without an Authorize dialog.
 
+### Second cursor (Windows, experimental)
+With `second_cursor = true` at the top of the config, a device entering this
+Windows machine moves a cursor of its own, drawn in color and labelled with
+the client's `hostname` (or its address), while the local mouse keeps the
+system cursor. For clicks, scrolling and drags the system cursor jumps to the
+second cursor and returns afterwards. Moving the second cursor past the edge
+facing the device sends it back.
+
+Windows has a single keyboard focus, so typing still goes to the window that
+was clicked last, by either cursor.
+
 ## Roadmap
 - [x] Graphical frontend (gtk + libadwaita)
 - [x] respect xdg-config-home for config file location.
