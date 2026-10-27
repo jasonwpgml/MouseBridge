@@ -5,8 +5,8 @@ use std::{net::IpAddr, time::Duration};
 use thiserror::Error;
 
 use lan_mouse_ipc::{
-    ClientHandle, ConnectionError, FrontendEvent, FrontendRequest, IpcError, Position,
-    connect_async,
+    ClientHandle, ConnectionError, FrontendEvent, FrontendRequest, IpcError, KeyboardMode,
+    Position, connect_async,
 };
 
 #[derive(Debug, Error)]
@@ -75,6 +75,9 @@ enum CliSubcommand {
     RemoveAuthorizedKey { sha256_fingerprint: String },
     /// save configuration to file
     SaveConfig,
+    /// choose where this device's keyboard input goes:
+    /// `follow` (with the pointer), `local` (this device) or a client's hostname
+    Keyboard { mode: String },
 }
 
 pub async fn run(args: CliArgs) -> Result<(), CliError> {
@@ -172,6 +175,14 @@ async fn execute(cmd: CliSubcommand) -> Result<(), CliError> {
                 .await?
         }
         CliSubcommand::SaveConfig => tx.request(FrontendRequest::SaveConfiguration).await?,
+        CliSubcommand::Keyboard { mode } => {
+            let mode = match mode.as_str() {
+                "follow" => KeyboardMode::FollowPointer,
+                "local" => KeyboardMode::Local,
+                _ => KeyboardMode::Device(mode),
+            };
+            tx.request(FrontendRequest::SetKeyboardMode(mode)).await?
+        }
     }
     Ok(())
 }

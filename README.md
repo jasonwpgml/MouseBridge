@@ -17,6 +17,8 @@ Share one mouse and keyboard between a Mac and Windows PCs. Based on Lan Mouse.
   넘어갈 수 있어요.
 - **연결 끊김 수정 (Windows)**: 한 번 연결이 끊기면 다시 받지 못하던 문제를 고쳤어요
   ([lan-mouse#262](https://github.com/feschber/lan-mouse/issues/262)).
+- **키보드 모드**: 키보드가 커서를 따라갈지, 이 기기에만 남을지, 한 기기로 고정될지 골라요.
+  실행 중에는 `mousebridge cli keyboard follow|local|<기기 이름>`으로 바꿔요 (맥·Windows).
 - **설치 스크립트**: 맥에서 한 번 실행하면 Windows PC에 붙여넣을 명령까지 만들어 줘요.
   로그인할 때 창 없이 자동으로 켜져요.
 
@@ -40,6 +42,8 @@ Lan Mouse를 쓰고 있었다면 설정과 인증서를 그대로 가져와요.
 ```toml
 # 맥에서 넘어온 마우스를 두 번째 커서로 보여 줘요 (Windows)
 second_cursor = true
+# 이 기기 키보드가 갈 곳: "follow"(커서 따라감, 기본), "local"(이 기기에만), 또는 기기 이름
+keyboard = "follow"
 
 [[clients]]
 hostname = "DESKTOP-ABC"

@@ -1,4 +1,5 @@
 use super::{Capture, CaptureError, CaptureEvent, Position, error::MacosCaptureCreationError};
+use crate::{KeyboardCapture, keyboard_capture};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use core_foundation::{
@@ -501,6 +502,31 @@ fn create_event_tap<'a>(
                     log::error!("Failed to send notification: {e}");
                 });
             return CallbackResult::Keep;
+        }
+
+        // keys staying on this device, or locked to one client
+        if matches!(
+            event_type,
+            CGEventType::KeyDown | CGEventType::KeyUp | CGEventType::FlagsChanged
+        ) {
+            match keyboard_capture() {
+                KeyboardCapture::FollowPointer => {}
+                KeyboardCapture::Local => return CallbackResult::Keep,
+                KeyboardCapture::Always(pos) => {
+                    get_events(
+                        &event_type,
+                        cg_ev,
+                        &mut res_events,
+                        &mut state.modifier_state,
+                    )
+                    .unwrap_or_else(|e| log::error!("Failed to get events: {e}"));
+                    for e in res_events {
+                        let _ = event_tx.blocking_send((pos, e));
+                    }
+                    cg_ev.set_type(CGEventType::Null);
+                    return CallbackResult::Drop;
+                }
+            }
         }
 
         // Are we in a client?

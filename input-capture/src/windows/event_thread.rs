@@ -32,6 +32,7 @@ use input_event::{
 };
 
 use super::{CaptureEvent, Position, display_util};
+use crate::{KeyboardCapture, keyboard_capture};
 
 pub(crate) struct EventThread {
     request_buffer: Arc<Mutex<Vec<ClientUpdate>>>,
@@ -332,8 +333,13 @@ unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM)
 }
 
 unsafe extern "system" fn kybrd_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    /* get active client if any */
-    let Some(client) = ACTIVE_CLIENT.get() else {
+    /* the client receiving keys: the active one or the one keys are locked to */
+    let client = match keyboard_capture() {
+        KeyboardCapture::FollowPointer => ACTIVE_CLIENT.get(),
+        KeyboardCapture::Local => None,
+        KeyboardCapture::Always(pos) => Some(pos),
+    };
+    let Some(client) = client else {
         return CallNextHookEx(None, ncode, wparam, lparam);
     };
 

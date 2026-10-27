@@ -17,7 +17,7 @@ use toml;
 use toml_edit::{self, DocumentMut};
 
 use lan_mouse_cli::CliArgs;
-use lan_mouse_ipc::{DEFAULT_PORT, Position};
+use lan_mouse_ipc::{DEFAULT_PORT, KeyboardMode, Position};
 
 use input_event::scancode::{
     self,
@@ -43,6 +43,8 @@ pub fn local_commit() -> [u8; 8] {
 }
 
 const CONFIG_FILE_NAME: &str = "config.toml";
+const KEYBOARD_FOLLOW: &str = "follow";
+const KEYBOARD_LOCAL: &str = "local";
 const CERT_FILE_NAME: &str = "mousebridge.pem";
 const CONFIG_DIR_NAME: &str = "mousebridge";
 /// where Lan Mouse, which MouseBridge is based on, keeps its files
@@ -57,6 +59,22 @@ fn default_path() -> Result<PathBuf, VarError> {
     let base = env::var("LOCALAPPDATA").unwrap_or(format!("{}/.config", env::var("USERPROFILE")?));
 
     Ok(PathBuf::from(base).join(CONFIG_DIR_NAME))
+}
+
+fn parse_keyboard_mode(value: Option<&str>) -> KeyboardMode {
+    match value {
+        None | Some(KEYBOARD_FOLLOW) => KeyboardMode::FollowPointer,
+        Some(KEYBOARD_LOCAL) => KeyboardMode::Local,
+        Some(hostname) => KeyboardMode::Device(hostname.to_owned()),
+    }
+}
+
+fn keyboard_mode_value(mode: &KeyboardMode) -> Option<String> {
+    match mode {
+        KeyboardMode::FollowPointer => None,
+        KeyboardMode::Local => Some(KEYBOARD_LOCAL.to_owned()),
+        KeyboardMode::Device(hostname) => Some(hostname.clone()),
+    }
 }
 
 /// Copies a Lan Mouse config and certificate into `dir` when it has no config
@@ -87,6 +105,8 @@ struct ConfigToml {
     cert_path: Option<PathBuf>,
     /// show remote pointers as cursors of their own (Windows only)
     second_cursor: Option<bool>,
+    /// where keyboard input goes: "follow" (default), "local" or a hostname
+    keyboard: Option<String>,
     clients: Option<Vec<TomlClient>>,
     authorized_fingerprints: Option<HashMap<String, String>>,
     /// per-client key remapping, keyed by client hostname
@@ -539,6 +559,19 @@ impl Config {
             .map(|(_, map)| KeyRemap::new(map))
     }
 
+    /// where this device's keyboard input goes
+    pub fn keyboard_mode(&self) -> KeyboardMode {
+        parse_keyboard_mode(
+            self.config_toml
+                .as_ref()
+                .and_then(|c| c.keyboard.as_deref()),
+        )
+    }
+
+    pub fn set_keyboard_mode(&mut self, mode: &KeyboardMode) {
+        self.config_toml.get_or_insert_default().keyboard = keyboard_mode_value(mode);
+    }
+
     /// With `second_cursor` on, the labels for remote pointers: the hostname
     /// of the client configured with that address.
     pub fn second_cursor_labels(&self) -> Option<HashMap<IpAddr, String>> {
@@ -670,6 +703,23 @@ KeyF18 = "KeyHanguel"
         let doc = written.parse::<DocumentMut>().unwrap();
         let reread: ConfigToml = toml_edit::de::from_document(doc).unwrap();
         assert_eq!(reread, config);
+    }
+
+    #[test]
+    fn keyboard_mode_round_trips() {
+        assert_eq!(parse_keyboard_mode(None), KeyboardMode::FollowPointer);
+        assert_eq!(
+            parse_keyboard_mode(Some("follow")),
+            KeyboardMode::FollowPointer
+        );
+        for mode in [
+            KeyboardMode::Local,
+            KeyboardMode::Device("DESKTOP-SN73G0N".into()),
+            KeyboardMode::FollowPointer,
+        ] {
+            let value = keyboard_mode_value(&mode);
+            assert_eq!(parse_keyboard_mode(value.as_deref()), mode);
+        }
     }
 
     #[test]

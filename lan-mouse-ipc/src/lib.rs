@@ -226,6 +226,8 @@ pub enum FrontendEvent {
     IncomingDisconnected(SocketAddr),
     /// failed connection attempt (approval for fingerprint required)
     ConnectionAttempt { fingerprint: String },
+    /// where this device's keyboard input goes
+    KeyboardMode(KeyboardMode),
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
@@ -266,6 +268,20 @@ pub enum FrontendRequest {
     UpdateLeaveHook(u64, Option<String>),
     /// save config file
     SaveConfiguration,
+    /// choose where this device's keyboard input goes, saved to the config
+    SetKeyboardMode(KeyboardMode),
+}
+
+/// Where this device's keyboard input goes.
+#[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
+pub enum KeyboardMode {
+    /// wherever the pointer is
+    #[default]
+    FollowPointer,
+    /// always this device, even while the pointer is on another one
+    Local,
+    /// always the client with this hostname, even while the pointer is here
+    Device(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]

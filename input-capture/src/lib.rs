@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Display,
     mem::swap,
+    sync::RwLock,
     task::{Poll, ready},
 };
 
@@ -50,6 +51,31 @@ impl Display for CaptureEvent {
             CaptureEvent::Input(e) => write!(f, "{e}"),
         }
     }
+}
+
+/// Where keyboard input goes, independently of the pointer.
+/// Only the Windows and macOS backends honor it.
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
+pub enum KeyboardCapture {
+    /// keys go wherever the pointer is
+    #[default]
+    FollowPointer,
+    /// keys are never captured and stay on this device
+    Local,
+    /// keys are always captured for the client at this position, even
+    /// while the pointer is on this device
+    Always(Position),
+}
+
+static KEYBOARD_CAPTURE: RwLock<KeyboardCapture> = RwLock::new(KeyboardCapture::FollowPointer);
+
+pub fn set_keyboard_capture(capture: KeyboardCapture) {
+    *KEYBOARD_CAPTURE.write().expect("lock") = capture;
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn keyboard_capture() -> KeyboardCapture {
+    *KEYBOARD_CAPTURE.read().expect("lock")
 }
 
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]

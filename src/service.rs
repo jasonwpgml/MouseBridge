@@ -1,5 +1,5 @@
 use crate::{
-    capture::{Capture, CaptureType, ICaptureEvent},
+    capture::{Capture, CaptureType, ICaptureEvent, KeyboardRoute},
     client::ClientManager,
     config::{Config, ConfigClient},
     connect::LanMouseConnection,
@@ -11,7 +11,7 @@ use crate::{
 use futures::StreamExt;
 use lan_mouse_ipc::{
     AsyncFrontendListener, ClientHandle, FrontendEvent, FrontendRequest, IpcError,
-    IpcListenerCreationError, Position, Status,
+    IpcListenerCreationError, KeyboardMode, Position, Status,
 };
 use log;
 use std::{
@@ -67,6 +67,8 @@ pub struct Service {
     /// map from capture handle to connection info
     incoming_conn_info: HashMap<ClientHandle, Incoming>,
     next_trigger_handle: u64,
+    /// where this device's keyboard input goes
+    keyboard_mode: KeyboardMode,
 }
 
 #[derive(Debug)]
@@ -106,6 +108,7 @@ impl Service {
         let resolver = DnsResolver::new()?;
 
         let port = config.port();
+        let keyboard_mode = config.keyboard_mode();
         let service = Self {
             config,
             capture,
@@ -123,6 +126,7 @@ impl Service {
             incoming_conn_info: Default::default(),
             incoming_conns: Default::default(),
             next_trigger_handle: 0,
+            keyboard_mode,
         };
         Ok(service)
     }
@@ -218,6 +222,7 @@ impl Service {
                 self.update_leave_hook(handle, leave_hook)
             }
             FrontendRequest::SaveConfiguration => self.save_config(),
+            FrontendRequest::SetKeyboardMode(mode) => self.set_keyboard_mode(mode),
         }
     }
 
@@ -259,6 +264,8 @@ impl Service {
         }
         let release_bind = self.config.release_bind();
         self.capture.set_release_bind(release_bind);
+        self.keyboard_mode = self.config.keyboard_mode();
+        self.apply_keyboard_mode();
         let authorized_keys = self.config.authorized_fingerprints();
         self.authorized_keys
             .write()
@@ -407,6 +414,7 @@ impl Service {
         ));
         let keys = self.authorized_keys.read().expect("lock").clone();
         self.notify_frontend(FrontendEvent::AuthorizedUpdated(keys));
+        self.notify_frontend(FrontendEvent::KeyboardMode(self.keyboard_mode.clone()));
     }
 
     const ENTER_HANDLE_BEGIN: u64 = u64::MAX / 2 + 1;
@@ -535,6 +543,7 @@ impl Service {
             /* notify capture and frontends */
             self.capture.create(handle, pos, CaptureType::Default);
             self.update_key_remap(handle);
+            self.apply_keyboard_mode();
             self.broadcast_client(handle);
             log::info!("activated client {handle} ({pos})");
         }
@@ -570,8 +579,49 @@ impl Service {
         if self.client_manager.set_hostname(handle, hostname.clone()) {
             self.resolve(handle);
             self.update_key_remap(handle);
+            self.apply_keyboard_mode();
         }
         self.broadcast_client(handle);
+    }
+
+    fn set_keyboard_mode(&mut self, mode: KeyboardMode) {
+        log::info!("keyboard mode: {mode:?}");
+        self.config.set_keyboard_mode(&mode);
+        if let Err(e) = self.config.write_back() {
+            log::warn!("failed to write config: {e}");
+        }
+        self.keyboard_mode = mode;
+        self.apply_keyboard_mode();
+        self.notify_frontend(FrontendEvent::KeyboardMode(self.keyboard_mode.clone()));
+    }
+
+    /// points capture at the client keys are locked to, found by hostname
+    fn apply_keyboard_mode(&mut self) {
+        let route = match &self.keyboard_mode {
+            KeyboardMode::FollowPointer => KeyboardRoute::FollowPointer,
+            KeyboardMode::Local => KeyboardRoute::Local,
+            KeyboardMode::Device(hostname) => {
+                let client = self
+                    .client_manager
+                    .registered_clients()
+                    .into_iter()
+                    .find(|&h| {
+                        self.client_manager
+                            .get_hostname(h)
+                            .is_some_and(|name| name.eq_ignore_ascii_case(hostname))
+                    });
+                match client {
+                    Some(handle) => KeyboardRoute::Client(handle),
+                    None => {
+                        log::warn!(
+                            "keyboard is locked to {hostname}, which is no configured client"
+                        );
+                        KeyboardRoute::FollowPointer
+                    }
+                }
+            }
+        };
+        self.capture.set_keyboard(route);
     }
 
     fn update_key_remap(&mut self, handle: ClientHandle) {

@@ -7,7 +7,8 @@ use std::{
 
 use futures::StreamExt;
 use input_capture::{
-    CaptureError, CaptureEvent, CaptureHandle, InputCapture, InputCaptureError, Position,
+    CaptureError, CaptureEvent, CaptureHandle, InputCapture, InputCaptureError, KeyboardCapture,
+    Position,
 };
 use input_event::{Event, KeyboardEvent, scancode};
 use lan_mouse_proto::ProtoEvent;
@@ -71,6 +72,20 @@ enum CaptureRequest {
     SetReleaseBind(Vec<scancode::Linux>),
     /// set key remapping for events sent to a client
     SetKeyRemap(CaptureHandle, Option<KeyRemap>),
+    /// choose where keyboard input goes
+    SetKeyboard(KeyboardRoute),
+}
+
+/// where keyboard input goes
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum KeyboardRoute {
+    /// to the client the pointer is on
+    #[default]
+    FollowPointer,
+    /// nowhere, keys stay on this device
+    Local,
+    /// always to this client
+    Client(CaptureHandle),
 }
 
 impl Capture {
@@ -90,6 +105,7 @@ impl Capture {
             conn,
             event_tx,
             key_remaps: Default::default(),
+            keyboard: Default::default(),
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
             state: Default::default(),
@@ -154,6 +170,10 @@ impl Capture {
             .request_tx
             .send(CaptureRequest::SetKeyRemap(handle, remap));
     }
+
+    pub(crate) fn set_keyboard(&self, route: KeyboardRoute) {
+        let _ = self.request_tx.send(CaptureRequest::SetKeyboard(route));
+    }
 }
 
 /// debounce a statement `$st`, i.e. the statement is executed only if the
@@ -181,6 +201,7 @@ struct CaptureTask {
     conn: LanMouseConnection,
     event_tx: Sender<ICaptureEvent>,
     key_remaps: HashMap<CaptureHandle, KeyRemap>,
+    keyboard: KeyboardRoute,
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
     state: State,
@@ -189,11 +210,35 @@ struct CaptureTask {
 impl CaptureTask {
     fn add_capture(&mut self, handle: CaptureHandle, pos: Position, capture_type: CaptureType) {
         self.captures.push((handle, pos, capture_type));
+        self.apply_keyboard();
     }
 
     fn remove_capture(&mut self, handle: CaptureHandle) {
         self.captures.retain(|&(h, ..)| handle != h);
         self.key_remaps.remove(&handle);
+        self.apply_keyboard();
+    }
+
+    fn set_keyboard(&mut self, route: KeyboardRoute) {
+        self.keyboard = route;
+        self.apply_keyboard();
+    }
+
+    /// tells the capture backend which keys to take, which for a client
+    /// keys are locked to depends on where its capture is
+    fn apply_keyboard(&self) {
+        let capture = match self.keyboard {
+            KeyboardRoute::FollowPointer => KeyboardCapture::FollowPointer,
+            KeyboardRoute::Local => KeyboardCapture::Local,
+            KeyboardRoute::Client(target) => self
+                .captures
+                .iter()
+                .find(|&&(h, ..)| h == target)
+                .map_or(KeyboardCapture::FollowPointer, |&(_, pos, _)| {
+                    KeyboardCapture::Always(pos)
+                }),
+        };
+        input_capture::set_keyboard_capture(capture);
     }
 
     fn set_key_remap(&mut self, handle: CaptureHandle, remap: Option<KeyRemap>) {
@@ -248,6 +293,7 @@ impl CaptureTask {
                             self.release_bind.borrow_mut().clone_from(&bind);
                         }
                         CaptureRequest::SetKeyRemap(h, r) => self.set_key_remap(h, r),
+                        CaptureRequest::SetKeyboard(route) => self.set_keyboard(route),
                     },
                     _ = self.cancellation_token.cancelled() => return,
                 }
@@ -352,6 +398,7 @@ impl CaptureTask {
                         self.release_bind.borrow_mut().clone_from(&bind);
                     }
                     CaptureRequest::SetKeyRemap(h, r) => self.set_key_remap(h, r),
+                    CaptureRequest::SetKeyboard(route) => self.set_keyboard(route),
                 },
                 _ = self.cancellation_token.cancelled() => break,
             }
@@ -370,6 +417,25 @@ impl CaptureTask {
         if capture.keys_pressed(&self.release_bind.borrow()) {
             log::info!("releasing capture: release-bind pressed");
             return self.release_capture(capture).await;
+        }
+
+        // keys locked to one client go there, wherever the pointer is
+        if let (KeyboardRoute::Client(target), CaptureEvent::Input(e @ Event::Keyboard(_))) =
+            (self.keyboard, event)
+        {
+            // every capture at a position gets a copy of its events; send once
+            if self.get_type(handle) == CaptureType::Default {
+                let event = ProtoEvent::Input(self.remap(target, e));
+                if let Err(e) = self.conn.send(event, target).await {
+                    const DUR: Duration = Duration::from_millis(500);
+                    debounce!(
+                        PREV_KEY_LOG,
+                        DUR,
+                        log::warn!("keys for client {target}: {e}")
+                    );
+                }
+            }
+            return Ok(());
         }
 
         if event == CaptureEvent::Begin {
@@ -480,6 +546,7 @@ impl CaptureTask {
 
 thread_local! {
     static PREV_LOG: Cell<Option<Instant>> = const { Cell::new(None) };
+    static PREV_KEY_LOG: Cell<Option<Instant>> = const { Cell::new(None) };
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
