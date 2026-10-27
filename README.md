@@ -444,6 +444,19 @@ KeyF18 = "KeyHanguel"
 On Windows, `KeyHanguel` and `KeyHanja` are emulated as the `VK_HANGUL` and
 `VK_HANJA` virtual keys so they toggle the IME regardless of keyboard type.
 
+#### Mac + Windows setup scripts
+`scripts/setup-mac.sh` installs the latest release on a Mac and writes the
+config above for each Windows PC, given as `HOST:POSITION[:IP]`:
+
+```sh
+bash <(curl -fsSL https://raw.githubusercontent.com/jasonwpgml/lan-mouse/feat/key-remap/scripts/setup-mac.sh) DESKTOP-ABC:top LAPTOP-XYZ:right
+```
+
+Run it while the previous KVM tool still works: for each PC it copies a
+PowerShell command running `scripts/setup-windows.ps1` to the clipboard, to be
+pasted there. That command passes the Mac's address and certificate
+fingerprint, so the PC trusts the Mac without an Authorize dialog.
+
 ## Roadmap
 - [x] Graphical frontend (gtk + libadwaita)
 - [x] respect xdg-config-home for config file location.
