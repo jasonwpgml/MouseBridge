@@ -10,6 +10,7 @@ use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr},
     rc::Rc,
+    sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
 use tokio::{
@@ -80,10 +81,12 @@ enum EmulationRequest {
 
 impl Emulation {
     /// `second_cursor_labels`: show remote pointers as cursors of their own,
-    /// labelled by address
+    /// labelled with the name their certificate was authorized under, or else
+    /// the name configured for their address
     pub(crate) fn new(
         backend: Option<input_emulation::Backend>,
         listener: LanMouseListener,
+        authorized_keys: Arc<RwLock<HashMap<String, String>>>,
         second_cursor_labels: Option<HashMap<IpAddr, String>>,
     ) -> Self {
         let emulation_proxy = EmulationProxy::new(backend, second_cursor_labels);
@@ -91,6 +94,7 @@ impl Emulation {
         let (event_tx, event_rx) = channel();
         let emulation_task = ListenTask {
             listener,
+            authorized_keys,
             emulation_proxy,
             request_rx,
             event_tx,
@@ -139,6 +143,8 @@ impl Emulation {
 
 struct ListenTask {
     listener: LanMouseListener,
+    /// certificate fingerprints and the names they were authorized under
+    authorized_keys: Arc<RwLock<HashMap<String, String>>>,
     emulation_proxy: EmulationProxy,
     request_rx: Receiver<EmulationRequest>,
     event_tx: Sender<EmulationEvent>,
@@ -159,6 +165,10 @@ impl ListenTask {
                             ProtoEvent::Enter(pos) => {
                                 if let Some(fingerprint) = self.listener.get_certificate_fingerprint(addr).await {
                                     log::info!("releasing capture: {addr} entered this device");
+                                    let name = self.authorized_keys.read().expect("lock").get(&fingerprint).cloned();
+                                    if let Some(name) = name.filter(|n| !n.is_empty()) {
+                                        self.emulation_proxy.set_label(addr, name);
+                                    }
                                     self.event_tx.send(EmulationEvent::ReleaseNotify).expect("channel closed");
                                     self.listener.reply(addr, ProtoEvent::Ack(0)).await;
                                     self.event_tx.send(EmulationEvent::Entered{addr, pos: to_ipc_pos(pos), fingerprint}).expect("channel closed");
@@ -245,6 +255,8 @@ pub(crate) struct EmulationProxy {
 
 enum ProxyRequest {
     Input(Event, SocketAddr),
+    /// name to show for the device at this address
+    Label(SocketAddr, String),
     Remove(SocketAddr),
     Terminate,
     Reenable,
@@ -266,6 +278,7 @@ impl EmulationProxy {
             event_tx,
             handles: Default::default(),
             next_id: 0,
+            labels: Default::default(),
             second_cursor_labels,
         };
         let task = spawn_local(emulation_task.run());
@@ -298,6 +311,12 @@ impl EmulationProxy {
         }
     }
 
+    fn set_label(&self, addr: SocketAddr, name: String) {
+        self.request_tx
+            .send(ProxyRequest::Label(addr, name))
+            .expect("channel closed");
+    }
+
     fn remove(&self, addr: SocketAddr) {
         self.request_tx
             .send(ProxyRequest::Remove(addr))
@@ -326,6 +345,8 @@ struct EmulationTask {
     event_tx: Sender<EmulationEvent>,
     handles: HashMap<SocketAddr, EmulationHandle>,
     next_id: EmulationHandle,
+    /// names of devices, from their certificates
+    labels: HashMap<SocketAddr, String>,
     second_cursor_labels: Option<HashMap<IpAddr, String>>,
 }
 
@@ -344,6 +365,9 @@ impl EmulationTask {
                     ProxyRequest::Reenable => break,
                     ProxyRequest::Terminate => return,
                     ProxyRequest::Input(..) => { /* emulation inactive => ignore */ }
+                    ProxyRequest::Label(addr, name) => {
+                        self.labels.insert(addr, name);
+                    }
                     ProxyRequest::Remove(..) => { /* emulation inactive => ignore */ }
                 }
             }
@@ -395,13 +419,14 @@ impl EmulationTask {
 
     /// label of the second cursor for the device at `addr`, if enabled
     fn second_cursor_label(&self, addr: SocketAddr) -> Option<String> {
-        let labels = self.second_cursor_labels.as_ref()?;
-        Some(
-            labels
-                .get(&addr.ip())
-                .cloned()
-                .unwrap_or_else(|| addr.ip().to_string()),
-        )
+        let configured = self.second_cursor_labels.as_ref()?;
+        let label = self
+            .labels
+            .get(&addr)
+            .or_else(|| configured.get(&addr.ip()))
+            .cloned()
+            .unwrap_or_else(|| addr.ip().to_string());
+        Some(label)
     }
 
     async fn do_emulation_session(
@@ -433,6 +458,9 @@ impl EmulationTask {
                                 .expect("channel closed");
                         }
                     },
+                    ProxyRequest::Label(addr, name) => {
+                        self.labels.insert(addr, name);
+                    }
                     ProxyRequest::Remove(addr) => {
                         if let Some(handle) = self.handles.remove(&addr) {
                             emulation.destroy(handle).await;
@@ -469,6 +497,7 @@ async fn wait_for_termination(rx: &mut Receiver<ProxyRequest>) {
         match rx.recv().await.expect("channel closed") {
             ProxyRequest::Terminate => return,
             ProxyRequest::Input(_, _) => continue,
+            ProxyRequest::Label(_, _) => continue,
             ProxyRequest::Remove(_) => continue,
             ProxyRequest::Reenable => continue,
         }
