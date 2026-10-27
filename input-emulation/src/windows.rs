@@ -35,7 +35,8 @@ use super::{Edge, Emulation, EmulationHandle};
 mod overlay;
 mod pointer;
 
-use overlay::{Overlay, rgb};
+use crate::cursor_image::color_for;
+use overlay::Overlay;
 use pointer::{Pointer, Rect};
 
 const DEFAULT_REPEAT_DELAY: Duration = Duration::from_millis(500);
@@ -130,10 +131,9 @@ impl Emulation for WindowsEmulation {
         let start = self
             .last_position
             .unwrap_or_else(|| default_position(&displays));
-        let color = CURSOR_COLORS[handle as usize % CURSOR_COLORS.len()];
         let cursor = SecondCursor {
             pointer: Pointer::new(start),
-            overlay: Overlay::new(&label, rgb(color.0, color.1, color.2)),
+            overlay: Overlay::new(&label, color_for(&label)),
             displays,
             held: HashSet::new(),
             restore_to: None,
@@ -147,10 +147,6 @@ impl Emulation for WindowsEmulation {
         self.second_cursors.get_mut(&handle)?.crossed.take()
     }
 }
-
-/// colors of second cursors, picked by handle
-const CURSOR_COLORS: [(u8, u8, u8); 4] =
-    [(232, 93, 4), (0, 133, 119), (124, 58, 237), (37, 99, 235)];
 
 /// A remote device's pointer drawn as its own cursor. The system cursor
 /// only visits it for clicks, scrolling and drags, then returns to where

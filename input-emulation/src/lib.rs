@@ -9,6 +9,8 @@ use input_event::{Event, KeyboardEvent};
 pub use self::error::{EmulationCreationError, EmulationError, InputEmulationError};
 
 #[cfg(windows)]
+mod cursor_image;
+#[cfg(windows)]
 mod windows;
 
 #[cfg(x11)]
