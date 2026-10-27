@@ -23,43 +23,25 @@ fn is_within_dp_boundary(point: (i32, i32), display: &RECT, pos: Position) -> bo
     }
 }
 
-/// returns whether the given position is within the display bounds with respect to the given
-/// barrier position
-///
-/// # Arguments
-///
-/// * `x`:
-/// * `y`:
-/// * `displays`:
-/// * `pos`:
-///
-/// returns: bool
-///
-fn in_bounds(point: (i32, i32), displays: &[RECT], pos: Position) -> bool {
-    displays
-        .iter()
-        .any(|d| is_within_dp_boundary(point, d, pos))
-}
-
 fn in_display_region(point: (i32, i32), displays: &[RECT]) -> bool {
     displays.iter().any(|d| is_within_dp_region(point, d))
 }
 
-fn moved_across_boundary(
-    prev_pos: (i32, i32),
-    curr_pos: (i32, i32),
-    displays: &[RECT],
-    pos: Position,
-) -> bool {
-    /* was within bounds, but is not anymore */
-    in_display_region(prev_pos, displays) && !in_bounds(curr_pos, displays, pos)
-}
-
+/// Returns the edge the cursor crossed when it left the display it was on
+/// and landed on no other display.
+///
+/// Edges are per display: with displays of different sizes the bottom edge
+/// of a shorter one counts as well, as long as no display continues below it
+/// at that point.
 pub(crate) fn entered_barrier(
     prev_pos: (i32, i32),
     curr_pos: (i32, i32),
     displays: &[RECT],
 ) -> Option<Position> {
+    if in_display_region(curr_pos, displays) {
+        return None;
+    }
+    let display = displays.iter().find(|d| is_within_dp_region(prev_pos, d))?;
     [
         Position::Left,
         Position::Right,
@@ -67,7 +49,7 @@ pub(crate) fn entered_barrier(
         Position::Bottom,
     ]
     .into_iter()
-    .find(|&pos| moved_across_boundary(prev_pos, curr_pos, displays, pos))
+    .find(|&pos| !is_within_dp_boundary(curr_pos, display, pos))
 }
 
 ///
@@ -96,4 +78,62 @@ pub(crate) fn clamp_to_display_bounds(
     let (min_x, max_x) = (display.left, display.right - 1);
     let (min_y, max_y) = (display.top, display.bottom - 1);
     (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+        RECT {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    /// a landscape display and a taller portrait display to its right that
+    /// reaches further down
+    fn displays() -> Vec<RECT> {
+        vec![rect(0, 0, 2560, 1440), rect(2560, -600, 4000, 1960)]
+    }
+
+    #[test]
+    fn bottom_of_shorter_display_is_a_barrier() {
+        let barrier = entered_barrier((1000, 1439), (1000, 1445), &displays());
+        assert_eq!(barrier, Some(Position::Bottom));
+    }
+
+    #[test]
+    fn moving_onto_neighbouring_display_is_no_barrier() {
+        assert_eq!(entered_barrier((2559, 500), (2565, 500), &displays()), None);
+    }
+
+    #[test]
+    fn edge_next_to_empty_space_is_a_barrier() {
+        let barrier = entered_barrier((2560, 1700), (2555, 1700), &displays());
+        assert_eq!(barrier, Some(Position::Left));
+    }
+
+    #[test]
+    fn outer_edges_are_barriers() {
+        let displays = displays();
+        assert_eq!(
+            entered_barrier((3000, 1959), (3000, 1965), &displays),
+            Some(Position::Bottom)
+        );
+        assert_eq!(
+            entered_barrier((3999, 0), (4005, 0), &displays),
+            Some(Position::Right)
+        );
+    }
+
+    #[test]
+    fn starting_outside_all_displays_is_no_barrier() {
+        assert_eq!(
+            entered_barrier((1000, 1500), (1000, 1510), &displays()),
+            None
+        );
+    }
 }
