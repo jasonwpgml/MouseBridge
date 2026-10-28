@@ -343,8 +343,8 @@ fn build_ui(app: &Application) {
     // — including the post-grant relaunch and normal Dock/Finder/`open`
     // launches. Opt out by setting `LAN_MOUSE_HIDDEN=1` in the
     // environment (useful for a LaunchAgent / login-item configuration
-    // where the user wants the app to come up quietly into the menu
-    // bar only, with no window on boot).
+    // where the user wants the app to come up quietly, with no window
+    // on boot).
     #[cfg(target_os = "macos")]
     if env::var_os("LAN_MOUSE_HIDDEN").is_none() {
         window.present();

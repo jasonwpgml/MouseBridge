@@ -49,7 +49,9 @@ pub fn setup(app: &adw::Application, window: &Window) {
                 !ns_app.is_null(),
                 "NSApplication sharedApplication returned null"
             );
-            msg_send_bool_usize(ns_app, sel(c"setActivationPolicy:"), 1);
+            // NSApplicationActivationPolicyRegular: show a Dock icon alongside
+            // the status item.
+            msg_send_bool_usize(ns_app, sel(c"setActivationPolicy:"), 0);
 
             let delegate = new_delegate();
             let menu = menu(&[

@@ -105,7 +105,7 @@ dnf install lan-mouse
 - Unzip it
 - Remove the quarantine with `xattr -rd com.apple.quarantine "Lan Mouse.app"`
 - Launch the app
-- Use the menu bar item to open the settings window or quit Lan Mouse. Bundled macOS builds run as a menu bar app and do not keep a Dock icon visible.
+- Use the menu bar item to open the settings window or quit Lan Mouse. Bundled macOS builds show a Dock icon too; closing the window keeps the app running, and clicking the Dock icon opens it again.
 - Grant accessibility permissions in System Preferences
 
 </details>

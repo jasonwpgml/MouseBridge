@@ -111,5 +111,5 @@ deb_depends = [ "libadwaita-1-0" ]
 resources = ["target/menubar-template.png"]
 
 [package.metadata.bundle.osx]
-info_plist_exts = ["build-aux/macos-lsui-element.plist"]
+info_plist_exts = ["build-aux/macos-info.plist"]
 
