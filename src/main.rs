@@ -15,7 +15,7 @@ use std::{
     env,
     fs::{self, File, OpenOptions},
     future::Future,
-    io::{self, Write},
+    io,
     path::PathBuf,
     process::{self, Child},
 };
@@ -47,14 +47,7 @@ enum LanMouseError {
 const MAX_LOG_SIZE: u64 = 5 * 1024 * 1024;
 
 fn main() {
-    // init logging, to stderr and a file that outlives a restart: an input
-    // capture that never lets go may leave nothing but a reboot
-    let env = Env::default().filter_or("LAN_MOUSE_LOG_LEVEL", "info");
-    let mut logger = env_logger::Builder::from_env(env);
-    if let Some(file) = open_log_file() {
-        logger.target(env_logger::Target::Pipe(Box::new(Tee(file))));
-    }
-    logger.init();
+    init_logging();
 
     if let Err(e) = run() {
         log::error!("{e}");
@@ -135,29 +128,73 @@ fn log_path() -> Option<PathBuf> {
     Some(dir.join("mousebridge.log"))
 }
 
+/// Logs to stderr and to a file that outlives a restart, since an input
+/// capture that never lets go may leave nothing but a reboot.
+fn init_logging() {
+    let env = || Env::default().filter_or("LAN_MOUSE_LOG_LEVEL", "info");
+    let stderr = env_logger::Builder::from_env(env()).build();
+    let file = open_log_file().map(|file| {
+        env_logger::Builder::from_env(env())
+            .target(env_logger::Target::Pipe(Box::new(file)))
+            .write_style(env_logger::WriteStyle::Never)
+            .build()
+    });
+    log::set_max_level(stderr.filter());
+    log::set_boxed_logger(Box::new(Logger { stderr, file })).expect("logger set once");
+}
+
+/// Passes the file at most info records: debug and trace ones include the
+/// keys typed, which must not pile up on disk.
+struct Logger {
+    stderr: env_logger::Logger,
+    file: Option<env_logger::Logger>,
+}
+
+impl log::Log for Logger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        self.stderr.enabled(metadata)
+    }
+
+    fn log(&self, record: &log::Record) {
+        self.stderr.log(record);
+        if record.level() <= log::Level::Info {
+            if let Some(file) = &self.file {
+                file.log(record);
+            }
+        }
+    }
+
+    fn flush(&self) {
+        self.stderr.flush();
+        if let Some(file) = &self.file {
+            file.flush();
+        }
+    }
+}
+
 fn open_log_file() -> Option<File> {
     let path = log_path()?;
-    fs::create_dir_all(path.parent()?).ok()?;
+    let mut dir = fs::DirBuilder::new();
+    dir.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut dir, 0o700);
+    dir.create(path.parent()?).ok()?;
     if fs::metadata(&path).is_ok_and(|m| m.len() > MAX_LOG_SIZE) {
         let _ = fs::rename(&path, path.with_extension("log.1"));
     }
-    OpenOptions::new().create(true).append(true).open(path).ok()
-}
-
-/// writes log lines to stderr and a file
-struct Tee(File);
-
-impl Write for Tee {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let _ = io::stderr().write_all(buf);
-        self.0.write_all(buf)?;
-        Ok(buf.len())
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let file = options.open(&path).ok()?;
+    // only the owner may read it, also when an older version created it
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(path.parent()?, fs::Permissions::from_mode(0o700));
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
     }
-
-    fn flush(&mut self) -> io::Result<()> {
-        let _ = io::stderr().flush();
-        self.0.flush()
-    }
+    Some(file)
 }
 
 fn run_async<F, E>(f: F) -> Result<(), LanMouseError>
