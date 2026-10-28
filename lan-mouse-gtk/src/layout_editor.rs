@@ -300,11 +300,13 @@ impl LayoutEditor {
             #[strong]
             state,
             move |gesture, x, y| {
-                let mut state = state.borrow_mut();
-                let Some((key, kind)) = state.hit((x, y)) else {
+                // denying ends the drag right away, which needs the state
+                let hit = state.borrow().hit((x, y));
+                let Some((key, kind)) = hit else {
                     gesture.set_state(gtk::EventSequenceState::Denied);
                     return;
                 };
+                let mut state = state.borrow_mut();
                 let (Some(start), Some(bounds)) = (state.placement(key), state.bounds(key)) else {
                     return;
                 };
