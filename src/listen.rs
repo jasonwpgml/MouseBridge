@@ -203,6 +203,16 @@ impl LanMouseListener {
         self.listen_tx.close();
     }
 
+    /// sends `event` to every peer connected to us
+    pub(crate) async fn broadcast(&self, event: ProtoEvent) {
+        log::trace!("broadcast {event} >=>=>=>=>=> *");
+        let (buf, len): ([u8; MAX_EVENT_SIZE], usize) = event.into();
+        let conns = self.conns.lock().await;
+        for (_, conn) in conns.iter() {
+            let _ = conn.send(&buf[..len]).await;
+        }
+    }
+
     pub(crate) async fn reply(&self, addr: SocketAddr, event: ProtoEvent) {
         log::trace!("reply {event} >=>=>=>=>=> {addr}");
         let (buf, len): ([u8; MAX_EVENT_SIZE], usize) = event.into();

@@ -219,6 +219,18 @@ impl LanMouseConnection {
         }
         Err(LanMouseConnectionError::NotConnected)
     }
+
+    /// sends `event` to every client we are connected to, without
+    /// connecting to the others
+    pub(crate) async fn broadcast(&self, event: ProtoEvent) {
+        let (buf, len): ([u8; MAX_EVENT_SIZE], usize) = event.into();
+        let conns = self.conns.lock().await.clone();
+        for (addr, conn) in conns {
+            if let Err(e) = conn.send(&buf[..len]).await {
+                log::debug!("{event} send to {addr} failed: {e}");
+            }
+        }
+    }
 }
 
 async fn connect_to_handle(

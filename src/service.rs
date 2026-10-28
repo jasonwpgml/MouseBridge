@@ -21,6 +21,7 @@ use std::{
     io,
     net::{IpAddr, SocketAddr},
     sync::{Arc, RwLock},
+    time::Duration,
 };
 use thiserror::Error;
 use tokio::{process::Command, signal, sync::Notify};
@@ -73,6 +74,8 @@ pub struct Service {
     keyboard_mode: KeyboardMode,
     /// mouse buttons pressed on this device
     local_clicks: tokio::sync::mpsc::UnboundedReceiver<()>,
+    /// this device's displays when the layout was last worked out
+    local_displays: Vec<DisplayInfo>,
 }
 
 #[derive(Debug)]
@@ -141,6 +144,7 @@ impl Service {
             next_trigger_handle: 0,
             keyboard_mode,
             local_clicks,
+            local_displays: local_displays(),
         };
         Ok(service)
     }
@@ -159,6 +163,7 @@ impl Service {
         }
         self.update_layout();
 
+        let mut display_check = tokio::time::interval(DISPLAY_CHECK_INTERVAL);
         loop {
             tokio::select! {
                 request = self.frontend_listener.next() => self.handle_frontend_request(request),
@@ -172,6 +177,7 @@ impl Service {
                     self.update_layout();
                     self.enumerate();
                 }
+                _ = display_check.tick() => self.check_local_displays(),
                 r = signal::ctrl_c() => break r.expect("failed to wait for CTRL+C"),
             }
         }
@@ -721,6 +727,25 @@ impl Service {
         });
     }
 
+    /// Plugging in or removing a display, mirroring or changing a resolution
+    /// moves this device's edges: work out the layout again and tell the
+    /// peers, whose layouts depend on these displays too.
+    fn check_local_displays(&mut self) {
+        let displays = local_displays();
+        if displays == self.local_displays {
+            return;
+        }
+        log::info!("displays changed: {displays:?}");
+        self.local_displays = displays;
+        self.update_layout();
+        self.notify_frontend(FrontendEvent::LocalLayout {
+            displays: self.local_displays.clone(),
+            placement: self.config.placement(),
+        });
+        self.capture.send_displays();
+        self.emulation.send_displays();
+    }
+
     /// Lets the pointer reach each placed client only where its displays
     /// touch this device's, from the side most of the touching is on.
     /// Clients not placed, or whose displays are not known yet, are reached
@@ -858,6 +883,10 @@ impl std::fmt::Display for HookKind {
         }
     }
 }
+
+/// how often to look for changed displays, which nothing reports to the
+/// service
+const DISPLAY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// this device's displays
 fn local_displays() -> Vec<DisplayInfo> {

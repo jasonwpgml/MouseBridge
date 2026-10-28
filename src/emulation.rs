@@ -89,6 +89,8 @@ enum EmulationRequest {
     Reenable,
     Release(SocketAddr),
     ChangePort(u16),
+    /// tell the connected peers about this device's displays again
+    SendDisplays,
     Terminate,
 }
 
@@ -135,6 +137,12 @@ impl Emulation {
     pub(crate) fn request_port_change(&self, port: u16) {
         self.request_tx
             .send(EmulationRequest::ChangePort(port))
+            .expect("channel closed")
+    }
+
+    pub(crate) fn send_displays(&self) {
+        self.request_tx
+            .send(EmulationRequest::SendDisplays)
             .expect("channel closed")
     }
 
@@ -243,6 +251,11 @@ impl ListenTask {
                         self.listener.request_port_change(port);
                         let result = self.listener.port_changed().await;
                         self.event_tx.send(EmulationEvent::PortChanged(result)).expect("channel closed");
+                    }
+                    EmulationRequest::SendDisplays => {
+                        for event in display_events() {
+                            self.listener.broadcast(event).await;
+                        }
                     }
                     EmulationRequest::Terminate => break,
                 },

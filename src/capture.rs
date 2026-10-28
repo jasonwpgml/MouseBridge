@@ -16,7 +16,11 @@ use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
 
-use crate::{connect::LanMouseConnection, key_remap::KeyRemap, layout::Portal};
+use crate::{
+    connect::{LanMouseConnection, display_events},
+    key_remap::KeyRemap,
+    layout::Portal,
+};
 
 pub(crate) struct Capture {
     cancellation_token: CancellationToken,
@@ -81,6 +85,8 @@ enum CaptureRequest {
     LocalClick,
     /// a mouse button was pressed on this client
     ClientClicked(CaptureHandle),
+    /// tell the connected clients about this device's displays again
+    SendDisplays,
 }
 
 /// A portal to a client and the gate it is in this device's pointer
@@ -210,6 +216,10 @@ impl Capture {
             .request_tx
             .send(CaptureRequest::SetPassages(handle, passages));
     }
+
+    pub(crate) fn send_displays(&self) {
+        let _ = self.request_tx.send(CaptureRequest::SendDisplays);
+    }
 }
 
 /// debounce a statement `$st`, i.e. the statement is executed only if the
@@ -325,6 +335,12 @@ impl CaptureTask {
         }
     }
 
+    async fn send_displays(&self) {
+        for event in display_events() {
+            self.conn.broadcast(event).await;
+        }
+    }
+
     fn set_passages(&mut self, handle: CaptureHandle, passages: Option<Vec<Passage>>) {
         match passages {
             Some(passages) => self.passages.insert(handle, passages),
@@ -407,6 +423,7 @@ impl CaptureTask {
                         CaptureRequest::SetPassages(h, p) => self.set_passages(h, p),
                         CaptureRequest::LocalClick => self.local_click().await,
                         CaptureRequest::ClientClicked(h) => self.clicked(Some(h)),
+                        CaptureRequest::SendDisplays => self.send_displays().await,
                     },
                     _ = self.cancellation_token.cancelled() => return,
                 }
@@ -527,6 +544,7 @@ impl CaptureTask {
                     }
                     CaptureRequest::LocalClick => self.local_click().await,
                     CaptureRequest::ClientClicked(h) => self.clicked(Some(h)),
+                    CaptureRequest::SendDisplays => self.send_displays().await,
                 },
                 _ = self.cancellation_token.cancelled() => break,
             }
