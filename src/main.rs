@@ -12,8 +12,11 @@ use lan_mouse_cli::CliError;
 use lan_mouse_gtk::GtkError;
 use lan_mouse_ipc::{IpcError, IpcListenerCreationError};
 use std::{
+    env,
+    fs::{self, File, OpenOptions},
     future::Future,
-    io,
+    io::{self, Write},
+    path::PathBuf,
     process::{self, Child},
 };
 use thiserror::Error;
@@ -40,10 +43,18 @@ enum LanMouseError {
     Cli(#[from] CliError),
 }
 
+/// the log file is started over once it grows past this, keeping one old one
+const MAX_LOG_SIZE: u64 = 5 * 1024 * 1024;
+
 fn main() {
-    // init logging
+    // init logging, to stderr and a file that outlives a restart: an input
+    // capture that never lets go may leave nothing but a reboot
     let env = Env::default().filter_or("LAN_MOUSE_LOG_LEVEL", "info");
-    env_logger::init_from_env(env);
+    let mut logger = env_logger::Builder::from_env(env);
+    if let Some(file) = open_log_file() {
+        logger.target(env_logger::Target::Pipe(Box::new(Tee(file))));
+    }
+    logger.init();
 
     if let Err(e) = run() {
         log::error!("{e}");
@@ -109,6 +120,44 @@ fn run() -> Result<(), LanMouseError> {
     }
 
     Ok(())
+}
+
+fn log_path() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    let dir = PathBuf::from(env::var_os("HOME")?).join("Library/Logs/MouseBridge");
+    #[cfg(windows)]
+    let dir = PathBuf::from(env::var_os("LOCALAPPDATA")?).join("mousebridge");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let dir = env::var_os("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| Some(PathBuf::from(env::var_os("HOME")?).join(".local/state")))?
+        .join("mousebridge");
+    Some(dir.join("mousebridge.log"))
+}
+
+fn open_log_file() -> Option<File> {
+    let path = log_path()?;
+    fs::create_dir_all(path.parent()?).ok()?;
+    if fs::metadata(&path).is_ok_and(|m| m.len() > MAX_LOG_SIZE) {
+        let _ = fs::rename(&path, path.with_extension("log.1"));
+    }
+    OpenOptions::new().create(true).append(true).open(path).ok()
+}
+
+/// writes log lines to stderr and a file
+struct Tee(File);
+
+impl Write for Tee {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let _ = io::stderr().write_all(buf);
+        self.0.write_all(buf)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        let _ = io::stderr().flush();
+        self.0.flush()
+    }
 }
 
 fn run_async<F, E>(f: F) -> Result<(), LanMouseError>

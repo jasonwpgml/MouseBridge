@@ -451,7 +451,19 @@ fn create_event_tap<'a>(
                                    event_type: CGEventType,
                                    cg_ev: &CGEvent| {
         log::trace!("Got event from tap: {event_type:?}");
-        let mut state = client_state.blocking_lock();
+        // all input on this Mac waits while the tap does, so note slow waits
+        let mut state = match client_state.try_lock() {
+            Ok(state) => state,
+            Err(_) => {
+                let waiting = std::time::Instant::now();
+                let state = client_state.blocking_lock();
+                let waited = waiting.elapsed();
+                if waited > std::time::Duration::from_millis(50) {
+                    log::warn!("event tap waited {waited:?} for the capture state");
+                }
+                state
+            }
+        };
         let mut capture_position = None;
         let mut res_events = vec![];
 

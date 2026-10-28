@@ -106,6 +106,7 @@ impl Capture {
             event_tx,
             key_remaps: Default::default(),
             keyboard: Default::default(),
+            ack_deadline: None,
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
             state: Default::default(),
@@ -202,6 +203,8 @@ struct CaptureTask {
     event_tx: Sender<ICaptureEvent>,
     key_remaps: HashMap<CaptureHandle, KeyRemap>,
     keyboard: KeyboardRoute,
+    /// when to give up on a client that has not acknowledged entering it
+    ack_deadline: Option<Instant>,
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
     state: State,
@@ -350,6 +353,12 @@ impl CaptureTask {
                     Some(event) => self.handle_capture_event(capture, event?).await?,
                     None => return Ok(()),
                 },
+                // input stays captured until the client acknowledges; never
+                // wait for that forever
+                _ = until(self.ack_deadline), if self.ack_deadline.is_some() => {
+                    log::warn!("releasing capture: client did not acknowledge within {ACK_TIMEOUT:?}");
+                    self.release_capture(capture).await?;
+                }
                 (handle, event) = self.conn.recv() => {
                     if let Some(active) = self.active_client {
                         if handle != active {
@@ -364,6 +373,7 @@ impl CaptureTask {
                         ProtoEvent::Ack(_) => {
                             log::info!("client {handle} acknowledged the connection!");
                             self.state = State::Sending;
+                            self.ack_deadline = None;
                         }
                         // client disconnected
                         ProtoEvent::Leave(_) => {
@@ -459,6 +469,7 @@ impl CaptureTask {
         // activated a new client
         if event == CaptureEvent::Begin && Some(handle) != self.active_client {
             self.state = State::WaitingForAck;
+            self.ack_deadline = Some(Instant::now() + ACK_TIMEOUT);
             self.active_client.replace(handle);
             self.event_tx
                 .send(ICaptureEvent::ClientEntered(handle))
@@ -489,6 +500,7 @@ impl CaptureTask {
     }
 
     async fn release_capture(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
+        self.ack_deadline = None;
         // If we have an active client, notify them we're leaving
         if let Some(handle) = self.active_client.take() {
             // Surface the leave to the service layer so it can fire
@@ -547,6 +559,16 @@ impl CaptureTask {
 thread_local! {
     static PREV_LOG: Cell<Option<Instant>> = const { Cell::new(None) };
     static PREV_KEY_LOG: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// how long a client may take to acknowledge that the pointer entered it
+const ACK_TIMEOUT: Duration = Duration::from_secs(1);
+
+async fn until(deadline: Option<Instant>) {
+    match deadline {
+        Some(at) => tokio::time::sleep_until(at.into()).await,
+        None => std::future::pending().await,
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
