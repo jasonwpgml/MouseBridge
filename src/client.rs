@@ -6,6 +6,7 @@ use std::{
 };
 
 use slab::Slab;
+use tokio::sync::Notify;
 
 use lan_mouse_ipc::{ClientConfig, ClientHandle, ClientState, DisplayInfo, Placement, Position};
 
@@ -14,6 +15,8 @@ use crate::config::ConfigClient;
 #[derive(Clone, Default)]
 pub struct ClientManager {
     clients: Rc<RefCell<Slab<(ClientConfig, ClientState)>>>,
+    /// a client reported a display
+    displays_changed: Rc<Notify>,
 }
 
 impl ClientManager {
@@ -328,6 +331,12 @@ impl ClientManager {
                 *slot = display;
             }
         }
+        self.displays_changed.notify_one();
+    }
+
+    /// waits until a client reported a display, whichever way it came in
+    pub(crate) async fn displays_changed(&self) {
+        self.displays_changed.notified().await
     }
 
     pub(crate) fn set_peer_commit(&self, handle: ClientHandle, commit: Option<[u8; 8]>) {

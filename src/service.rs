@@ -168,6 +168,10 @@ impl Service {
                 event = self.resolver.event() => self.handle_resolver_event(event),
                 _ = self.config.changed() => self.handle_config_change(),
                 Some(()) = self.local_clicks.recv() => self.capture.local_click(),
+                _ = self.client_manager.displays_changed() => {
+                    self.update_layout();
+                    self.enumerate();
+                }
                 r = signal::ctrl_c() => break r.expect("failed to wait for CTRL+C"),
             }
         }
@@ -375,8 +379,6 @@ impl Service {
                 if let Some(handle) = self.client_manager.get_client(addr) {
                     self.client_manager
                         .set_display(handle, index, count, display);
-                    self.update_layout();
-                    self.broadcast_client(handle);
                 }
             }
             EmulationEvent::PeerHello { addr, commit } => {
