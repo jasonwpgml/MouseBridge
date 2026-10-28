@@ -1,17 +1,19 @@
 use crate::{
-    capture::{Capture, CaptureType, ICaptureEvent, KeyboardRoute},
+    capture::{Capture, CaptureType, ICaptureEvent, KeyboardRoute, Passage, to_capture_pos},
     client::ClientManager,
     config::{Config, ConfigClient},
     connect::LanMouseConnection,
     crypto,
     dns::{DnsEvent, DnsResolver},
     emulation::{Emulation, EmulationEvent},
+    layout::{self, Device},
     listen::{LanMouseListener, ListenerCreationError},
 };
 use futures::StreamExt;
+use input_capture::Gate;
 use lan_mouse_ipc::{
-    AsyncFrontendListener, ClientHandle, FrontendEvent, FrontendRequest, IpcError,
-    IpcListenerCreationError, KeyboardMode, Position, Status,
+    AsyncFrontendListener, ClientHandle, DisplayInfo, FrontendEvent, FrontendRequest, IpcError,
+    IpcListenerCreationError, KeyboardMode, Placement, Position, Status,
 };
 use log;
 use std::{
@@ -148,6 +150,7 @@ impl Service {
         for handle in active {
             self.activate_client(handle);
         }
+        self.update_layout();
 
         loop {
             tokio::select! {
@@ -228,6 +231,12 @@ impl Service {
             }
             FrontendRequest::SaveConfiguration => self.save_config(),
             FrontendRequest::SetKeyboardMode(mode) => self.set_keyboard_mode(mode),
+            FrontendRequest::UpdatePlacement(handle, placement) => {
+                self.update_placement(handle, placement)
+            }
+            FrontendRequest::UpdateLocalPlacement(placement) => {
+                self.update_local_placement(placement)
+            }
         }
     }
 
@@ -243,6 +252,7 @@ impl Service {
                 active: s.active,
                 enter_hook: c.cmd,
                 leave_hook: c.leave_cmd,
+                placement: c.placement,
             })
             .collect();
         self.config.set_clients(clients);
@@ -276,6 +286,7 @@ impl Service {
             .write()
             .unwrap()
             .clone_from(&authorized_keys);
+        self.update_layout();
         self.sync_frontend();
     }
 
@@ -351,6 +362,8 @@ impl Service {
                 if let Some(handle) = self.client_manager.get_client(addr) {
                     self.client_manager
                         .set_display(handle, index, count, display);
+                    self.update_layout();
+                    self.broadcast_client(handle);
                 }
             }
             EmulationEvent::PeerHello { addr, commit } => {
@@ -431,6 +444,10 @@ impl Service {
         let keys = self.authorized_keys.read().expect("lock").clone();
         self.notify_frontend(FrontendEvent::AuthorizedUpdated(keys));
         self.notify_frontend(FrontendEvent::KeyboardMode(self.keyboard_mode.clone()));
+        self.notify_frontend(FrontendEvent::LocalLayout {
+            displays: local_displays(),
+            placement: self.config.placement(),
+        });
     }
 
     const ENTER_HANDLE_BEGIN: u64 = u64::MAX / 2 + 1;
@@ -543,13 +560,15 @@ impl Service {
         /* resolve dns on activate */
         self.resolve(handle);
 
-        /* deactivate potential other client at this position */
+        /* deactivate potential other client at this position, unless
+         * placements split the edge between them */
         let Some(pos) = self.client_manager.get_pos(handle) else {
             return;
         };
 
         if let Some(other) = self.client_manager.client_at(pos) {
-            if other != handle {
+            let placed = |h| self.client_manager.get_placement(h).is_some();
+            if other != handle && !(placed(handle) && placed(other)) {
                 self.deactivate_client(other);
             }
         }
@@ -665,6 +684,100 @@ impl Service {
         self.broadcast_client(handle);
     }
 
+    fn update_placement(&mut self, handle: ClientHandle, placement: Option<Placement>) {
+        log::info!("placement of client {handle}: {placement:?}");
+        self.client_manager.set_placement(handle, placement);
+        self.save_config();
+        self.update_layout();
+        self.broadcast_client(handle);
+    }
+
+    fn update_local_placement(&mut self, placement: Placement) {
+        log::info!("placement of this device: {placement:?}");
+        self.config.set_placement(placement);
+        self.save_config();
+        self.update_layout();
+        self.notify_frontend(FrontendEvent::LocalLayout {
+            displays: local_displays(),
+            placement,
+        });
+    }
+
+    /// Lets the pointer reach each placed client only where its displays
+    /// touch this device's, from the side most of the touching is on.
+    /// Clients not placed, or whose displays are not known yet, are reached
+    /// along their whole edge as before.
+    fn update_layout(&mut self) {
+        let local_displays = local_displays();
+        let local = Device {
+            name: "",
+            displays: &local_displays,
+            placement: self.config.placement(),
+        };
+        let clients = self.client_manager.get_client_states();
+        let names = clients
+            .iter()
+            .map(|(h, ..)| h.to_string())
+            .collect::<Vec<_>>();
+        let placed = clients
+            .iter()
+            .zip(&names)
+            .filter_map(|((_, c, s), name)| {
+                let placement = c.placement?;
+                (!s.displays.is_empty()).then_some(Device {
+                    name,
+                    displays: &s.displays,
+                    placement,
+                })
+            })
+            .collect::<Vec<_>>();
+        let portals = layout::portals(&local, &placed);
+
+        let mut moved = Vec::new();
+        for (name, device) in placed.iter().map(|d| (d.name, d)) {
+            let handle: ClientHandle = name.parse().expect("handle");
+            let passages = portals
+                .iter()
+                .filter(|p| p.client == name)
+                .map(|portal| {
+                    let scale = local_displays
+                        .get(portal.display)
+                        .map_or(100, pointer_scale);
+                    let to_pointer = |v: i32| v * scale / 100;
+                    let gate = Gate {
+                        side: to_capture_pos(portal.side),
+                        at: to_pointer(portal.at),
+                        from: to_pointer(portal.from),
+                        to: to_pointer(portal.to),
+                    };
+                    Passage {
+                        gate,
+                        portal: portal.clone(),
+                        pointer_scale: scale,
+                    }
+                })
+                .collect::<Vec<_>>();
+            log::info!(
+                "client {handle} at {:?}: {} passage(s)",
+                device.placement,
+                passages.len()
+            );
+            if let Some(side) = layout::main_side(&portals, name) {
+                moved.push((handle, side));
+            }
+            self.capture.set_passages(handle, Some(passages));
+        }
+        for (handle, ..) in clients
+            .iter()
+            .filter(|(h, ..)| !placed.iter().any(|d| d.name == h.to_string()))
+        {
+            self.capture.set_passages(*handle, None);
+        }
+        for (handle, side) in moved {
+            self.update_pos(handle, side);
+        }
+    }
+
     fn update_enter_hook(&mut self, handle: ClientHandle, enter_hook: Option<String>) {
         self.client_manager.set_enter_hook(handle, enter_hook);
         self.broadcast_client(handle);
@@ -725,5 +838,29 @@ impl std::fmt::Display for HookKind {
             HookKind::Enter => f.write_str("enter"),
             HookKind::Leave => f.write_str("leave"),
         }
+    }
+}
+
+/// this device's displays
+fn local_displays() -> Vec<DisplayInfo> {
+    input_capture::displays()
+        .into_iter()
+        .map(|d| DisplayInfo {
+            x: d.x,
+            y: d.y,
+            width: d.width,
+            height: d.height,
+            scale: d.scale,
+        })
+        .collect()
+}
+
+/// Pointer units per device-independent unit, in percent: on Windows the
+/// pointer moves in physical pixels.
+fn pointer_scale(display: &DisplayInfo) -> i32 {
+    if cfg!(windows) {
+        display.scale.max(1) as i32
+    } else {
+        100
     }
 }

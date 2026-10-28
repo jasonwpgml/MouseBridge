@@ -4,6 +4,7 @@ mod client_row;
 mod fingerprint_window;
 mod key_object;
 mod key_row;
+mod layout_editor;
 #[cfg(target_os = "macos")]
 mod macos_privacy;
 #[cfg(target_os = "macos")]
@@ -325,6 +326,10 @@ fn build_ui(app: &Application) {
                         window.show_toast(format!("{addr} disconnected").as_str());
                     }
                     FrontendEvent::KeyboardMode(_) => {}
+                    FrontendEvent::LocalLayout {
+                        displays,
+                        placement,
+                    } => window.set_local_layout(displays, placement),
                 }
             }
         }

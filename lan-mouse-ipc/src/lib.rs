@@ -142,6 +142,9 @@ pub struct ClientConfig {
     pub cmd: Option<String>,
     /// leave hook
     pub leave_cmd: Option<String>,
+    /// where the client sits next to this device, if it was placed
+    #[serde(default)]
+    pub placement: Option<Placement>,
 }
 
 impl Default for ClientConfig {
@@ -153,6 +156,7 @@ impl Default for ClientConfig {
             pos: Default::default(),
             cmd: None,
             leave_cmd: None,
+            placement: None,
         }
     }
 }
@@ -202,6 +206,27 @@ pub struct DisplayInfo {
     pub scale: u16,
 }
 
+/// Where a device's displays sit on the canvas all devices are arranged on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Placement {
+    /// where the device's display origin sits on the canvas
+    pub x: i32,
+    pub y: i32,
+    /// how large the device is drawn, in percent of its real size
+    pub size: u16,
+}
+
+impl Default for Placement {
+    fn default() -> Self {
+        Self {
+            x: 0,
+            y: 0,
+            size: 100,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FrontendEvent {
     /// a client was created
@@ -243,6 +268,11 @@ pub enum FrontendEvent {
     ConnectionAttempt { fingerprint: String },
     /// where this device's keyboard input goes
     KeyboardMode(KeyboardMode),
+    /// this device's displays and where it sits on the canvas
+    LocalLayout {
+        displays: Vec<DisplayInfo>,
+        placement: Placement,
+    },
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Serialize, Deserialize)]
@@ -285,6 +315,10 @@ pub enum FrontendRequest {
     SaveConfiguration,
     /// choose where this device's keyboard input goes, saved to the config
     SetKeyboardMode(KeyboardMode),
+    /// place a client on the canvas, or take it off
+    UpdatePlacement(ClientHandle, Option<Placement>),
+    /// place this device on the canvas
+    UpdateLocalPlacement(Placement),
 }
 
 /// Where this device's keyboard input goes.

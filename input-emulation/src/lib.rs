@@ -221,6 +221,14 @@ impl InputEmulation {
         self.emulation.set_second_cursor(handle, label).await
     }
 
+    /// Puts the handle's pointer where it enters this device, a point in
+    /// device-independent display coordinates (points on macOS, physical
+    /// pixels divided by the scaling on Windows), where the backend supports
+    /// it.
+    pub async fn enter_at(&mut self, handle: EmulationHandle, point: (i32, i32)) {
+        self.emulation.enter_at(handle, point).await
+    }
+
     /// The screen edge the handle's second cursor was pushed against since
     /// the last call, if any.
     pub fn take_crossed_edge(&mut self, handle: EmulationHandle) -> Option<Edge> {
@@ -261,6 +269,7 @@ trait Emulation: Send {
     async fn destroy(&mut self, handle: EmulationHandle);
     async fn terminate(&mut self);
     async fn set_second_cursor(&mut self, _handle: EmulationHandle, _label: String) {}
+    async fn enter_at(&mut self, _handle: EmulationHandle, _point: (i32, i32)) {}
     fn take_crossed_edge(&mut self, _handle: EmulationHandle) -> Option<Edge> {
         None
     }

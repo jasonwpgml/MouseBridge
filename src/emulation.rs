@@ -183,6 +183,7 @@ impl ListenTask {
                                     self.event_tx.send(EmulationEvent::Entered{addr, pos: to_ipc_pos(pos), fingerprint}).expect("channel closed");
                                 }
                             }
+                            ProtoEvent::EnterAt { x, y } => self.emulation_proxy.enter_at(addr, (x, y)),
                             ProtoEvent::Leave(_) => {
                                 self.emulation_proxy.remove(addr);
                                 self.listener.reply(addr, ProtoEvent::Ack(0)).await;
@@ -271,6 +272,8 @@ pub(crate) struct EmulationProxy {
 
 enum ProxyRequest {
     Input(Event, SocketAddr),
+    /// where the device at this address enters
+    EnterAt(SocketAddr, (i32, i32)),
     /// name to show for the device at this address
     Label(SocketAddr, String),
     Remove(SocketAddr),
@@ -323,6 +326,14 @@ impl EmulationProxy {
         if self.emulation_active.get() {
             self.request_tx
                 .send(ProxyRequest::Input(event, addr))
+                .expect("channel closed");
+        }
+    }
+
+    fn enter_at(&self, addr: SocketAddr, point: (i32, i32)) {
+        if self.emulation_active.get() {
+            self.request_tx
+                .send(ProxyRequest::EnterAt(addr, point))
                 .expect("channel closed");
         }
     }
@@ -380,7 +391,8 @@ impl EmulationTask {
                 match self.request_rx.recv().await.expect("channel closed") {
                     ProxyRequest::Reenable => break,
                     ProxyRequest::Terminate => return,
-                    ProxyRequest::Input(..) => { /* emulation inactive => ignore */ }
+                    ProxyRequest::Input(..) | ProxyRequest::EnterAt(..) => { /* emulation inactive => ignore */
+                    }
                     ProxyRequest::Label(addr, name) => {
                         self.labels.insert(addr, name);
                     }
@@ -445,6 +457,25 @@ impl EmulationTask {
         Some(label)
     }
 
+    /// the emulation handle of the device at `addr`, created on first use
+    async fn handle(
+        &mut self,
+        emulation: &mut InputEmulation,
+        addr: SocketAddr,
+    ) -> EmulationHandle {
+        if let Some(&handle) = self.handles.get(&addr) {
+            return handle;
+        }
+        let handle = self.next_id;
+        self.next_id += 1;
+        emulation.create(handle).await;
+        if let Some(label) = self.second_cursor_label(addr) {
+            emulation.set_second_cursor(handle, label).await;
+        }
+        self.handles.insert(addr, handle);
+        handle
+    }
+
     async fn do_emulation_session(
         &mut self,
         emulation: &mut InputEmulation,
@@ -453,19 +484,7 @@ impl EmulationTask {
             tokio::select! {
                 e = self.request_rx.recv() => match e.expect("channel closed") {
                     ProxyRequest::Input(event, addr) => {
-                        let handle = match self.handles.get(&addr) {
-                            Some(&handle) => handle,
-                            None => {
-                                let handle = self.next_id;
-                                self.next_id += 1;
-                                emulation.create(handle).await;
-                                if let Some(label) = self.second_cursor_label(addr) {
-                                    emulation.set_second_cursor(handle, label).await;
-                                }
-                                self.handles.insert(addr, handle);
-                                handle
-                            }
-                        };
+                        let handle = self.handle(emulation, addr).await;
                         emulation.consume(event, handle).await?;
                         if let Some(edge) = emulation.take_crossed_edge(handle) {
                             let pos = to_ipc_pos(edge_position(edge));
@@ -474,6 +493,10 @@ impl EmulationTask {
                                 .expect("channel closed");
                         }
                     },
+                    ProxyRequest::EnterAt(addr, point) => {
+                        let handle = self.handle(emulation, addr).await;
+                        emulation.enter_at(handle, point).await;
+                    }
                     ProxyRequest::Label(addr, name) => {
                         self.labels.insert(addr, name);
                     }
@@ -513,6 +536,7 @@ async fn wait_for_termination(rx: &mut Receiver<ProxyRequest>) {
         match rx.recv().await.expect("channel closed") {
             ProxyRequest::Terminate => return,
             ProxyRequest::Input(_, _) => continue,
+            ProxyRequest::EnterAt(_, _) => continue,
             ProxyRequest::Label(_, _) => continue,
             ProxyRequest::Remove(_) => continue,
             ProxyRequest::Reenable => continue,

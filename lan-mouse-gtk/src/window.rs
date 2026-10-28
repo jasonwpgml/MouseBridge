@@ -11,13 +11,16 @@ use gtk::{
 };
 
 use lan_mouse_ipc::{
-    ClientConfig, ClientHandle, ClientState, DEFAULT_PORT, FrontendRequest, FrontendRequestWriter,
-    Position,
+    ClientConfig, ClientHandle, ClientState, DEFAULT_PORT, DisplayInfo, FrontendRequest,
+    FrontendRequestWriter, Placement, Position,
 };
 
 use crate::{
-    authorization_window::AuthorizationWindow, fingerprint_window::FingerprintWindow,
-    key_object::KeyObject, key_row::KeyRow,
+    authorization_window::AuthorizationWindow,
+    fingerprint_window::FingerprintWindow,
+    key_object::KeyObject,
+    key_row::KeyRow,
+    layout_editor::{Key, LayoutEditor},
 };
 
 use super::{client_object::ClientObject, client_row::ClientRow};
@@ -48,7 +51,39 @@ impl Window {
             .frontend_request_writer
             .borrow_mut()
             .replace(conn);
+        window.setup_layout_editor();
         window
+    }
+
+    fn setup_layout_editor(&self) {
+        let editor = LayoutEditor::new(clone!(
+            #[weak(rename_to = window)]
+            self,
+            move |key, placement| match key {
+                Key::Local => window.request(FrontendRequest::UpdateLocalPlacement(placement)),
+                Key::Client(handle) => {
+                    window.request(FrontendRequest::UpdatePlacement(handle, Some(placement)))
+                }
+            }
+        ));
+        self.imp().layout_group.add(editor.widget());
+        self.imp().layout_editor.replace(Some(editor));
+    }
+
+    fn layout_editor(&self) -> LayoutEditor {
+        self.imp()
+            .layout_editor
+            .borrow()
+            .clone()
+            .expect("layout editor")
+    }
+
+    pub(super) fn set_local_layout(&self, displays: Vec<DisplayInfo>, placement: Placement) {
+        let name = hostname::get()
+            .ok()
+            .and_then(|h| h.into_string().ok())
+            .unwrap_or_else(|| "this device".to_owned());
+        self.layout_editor().set_local(name, displays, placement);
     }
 
     fn clients(&self) -> gio::ListStore {
@@ -287,6 +322,9 @@ impl Window {
         client: ClientConfig,
         state: ClientState,
     ) {
+        let editor = self.layout_editor();
+        editor.set_client(handle, client_name(&client, handle), client.placement);
+        editor.set_client_displays(handle, state.displays.clone());
         let client = ClientObject::new(handle, client, state.clone());
         self.clients().append(&client);
         self.update_placeholder_visibility();
@@ -321,6 +359,7 @@ impl Window {
     }
 
     pub(super) fn delete_client(&self, handle: ClientHandle) {
+        self.layout_editor().remove_client(handle);
         let Some(idx) = self.client_idx(handle) else {
             log::warn!("could not find client with handle {handle}");
             return;
@@ -333,6 +372,8 @@ impl Window {
     }
 
     pub(super) fn update_client_config(&self, handle: ClientHandle, client: ClientConfig) {
+        self.layout_editor()
+            .set_client(handle, client_name(&client, handle), client.placement);
         let Some(row) = self.row_for_handle(handle) else {
             log::warn!("could not find row for handle {handle}");
             return;
@@ -351,6 +392,9 @@ impl Window {
             log::warn!("could not find row for handle {handle}");
             return;
         };
+
+        self.layout_editor()
+            .set_client_displays(handle, state.displays.clone());
 
         /* activation state */
         row.set_active(state.active);
@@ -569,4 +613,12 @@ impl Window {
         window.present();
         self.imp().authorization_window.replace(Some(window));
     }
+}
+
+/// what to call a client in the layout
+fn client_name(client: &ClientConfig, handle: ClientHandle) -> String {
+    client
+        .hostname
+        .clone()
+        .unwrap_or_else(|| format!("client {handle}"))
 }

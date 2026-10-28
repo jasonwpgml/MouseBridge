@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fmt::Display,
-    mem::swap,
     sync::RwLock,
     task::{Poll, ready},
 };
@@ -42,6 +41,9 @@ pub type CaptureHandle = u64;
 pub enum CaptureEvent {
     /// capture on this capture handle is now active
     Begin,
+    /// capture is now active, the pointer left the screen at this point in
+    /// pointer coordinates
+    BeginAt((i32, i32)),
     /// input event coming from capture handle
     Input(Event),
 }
@@ -50,6 +52,7 @@ impl Display for CaptureEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CaptureEvent::Begin => write!(f, "begin capture"),
+            CaptureEvent::BeginAt((x, y)) => write!(f, "begin capture at {x},{y}"),
             CaptureEvent::Input(e) => write!(f, "{e}"),
         }
     }
@@ -111,6 +114,43 @@ impl Display for Position {
     }
 }
 
+/// How far a point may be from a gate's edge and still pass through it, as
+/// the pointer is held a pixel inside the screen.
+const GATE_TOLERANCE: i32 = 2;
+
+/// A stretch of a display edge the pointer may leave through, in pointer
+/// coordinates. Only the Windows and macOS backends honor gates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Gate {
+    pub side: Position,
+    /// coordinate of the edge, x for left and right, y for top and bottom
+    pub at: i32,
+    /// stretch of the edge, end exclusive: y for left and right, x for top
+    /// and bottom
+    pub from: i32,
+    pub to: i32,
+}
+
+impl Gate {
+    /// whether leaving through `side` at `(x, y)` passes this gate
+    pub fn contains(&self, side: Position, (x, y): (i32, i32)) -> bool {
+        let (at, along) = match side {
+            Position::Left | Position::Right => (x, y),
+            Position::Top | Position::Bottom => (y, x),
+        };
+        side == self.side
+            && (at - self.at).abs() <= GATE_TOLERANCE
+            && (self.from..self.to).contains(&along)
+    }
+}
+
+/// whether leaving through `side` at `point` is allowed by `gates`, where no
+/// gates means the whole edge
+#[cfg(any(windows, target_os = "macos"))]
+fn passes(gates: Option<&Vec<Gate>>, side: Position, point: (i32, i32)) -> bool {
+    gates.is_none_or(|gates| gates.iter().any(|g| g.contains(side, point)))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Backend {
     #[cfg(libei)]
@@ -155,6 +195,11 @@ pub struct InputCapture {
     id_map: HashMap<CaptureHandle, Position>,
     /// pending events
     pending: VecDeque<(CaptureHandle, CaptureEvent)>,
+    /// gates of the handles that only take the pointer through those
+    gates: HashMap<CaptureHandle, Vec<Gate>>,
+    /// the handles the current capture goes to, chosen by where the pointer
+    /// left
+    routed: Option<(Position, Vec<CaptureHandle>)>,
 }
 
 impl InputCapture {
@@ -166,11 +211,56 @@ impl InputCapture {
 
         if let Some(v) = self.position_map.get_mut(&pos) {
             v.push(id);
-            Ok(())
         } else {
             self.position_map.insert(pos, vec![id]);
-            self.capture.create(pos).await
+            self.capture.create(pos).await?;
         }
+        self.update_gates(pos);
+        Ok(())
+    }
+
+    /// Lets the pointer reach the handle only through `gates`, or anywhere
+    /// along its edge with `None`.
+    pub fn set_gates(&mut self, id: CaptureHandle, gates: Option<Vec<Gate>>) {
+        match gates {
+            Some(gates) => self.gates.insert(id, gates),
+            None => self.gates.remove(&id),
+        };
+        if let Some(&pos) = self.id_map.get(&id) {
+            self.update_gates(pos);
+        }
+    }
+
+    /// tells the backend the gates of all handles at `pos`
+    fn update_gates(&mut self, pos: Position) {
+        let ids = self.position_map.get(&pos).cloned().unwrap_or_default();
+        let gated = ids
+            .iter()
+            .filter_map(|id| self.gates.get(id))
+            .flatten()
+            .copied()
+            .collect::<Vec<_>>();
+        let gates = ids
+            .iter()
+            .any(|id| self.gates.contains_key(id))
+            .then_some(gated);
+        self.capture.set_gates(pos, gates);
+    }
+
+    /// the handles at `pos` a capture beginning at `point` goes to: those
+    /// with a gate there and those without gates
+    fn route(&self, pos: Position, point: (i32, i32)) -> Vec<CaptureHandle> {
+        let ids = self.position_map.get(&pos).cloned().unwrap_or_default();
+        let routed = ids
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.gates
+                    .get(id)
+                    .is_none_or(|gates| gates.iter().any(|g| g.contains(pos, point)))
+            })
+            .collect::<Vec<_>>();
+        if routed.is_empty() { ids } else { routed }
     }
 
     /// destroy the client with the given id, if it exists
@@ -185,10 +275,13 @@ impl InputCapture {
         remaining.retain(|&i| i != id);
 
         log::debug!("remaining ids @ {pos}: {remaining:?}");
+        self.gates.remove(&id);
         if remaining.is_empty() {
             log::debug!("destroying capture @ {pos} - no remaining ids");
             self.position_map.remove(&pos);
             self.capture.destroy(pos).await?;
+        } else {
+            self.update_gates(pos);
         }
         Ok(())
     }
@@ -196,6 +289,7 @@ impl InputCapture {
     /// release mouse
     pub async fn release(&mut self) -> Result<(), CaptureError> {
         self.pressed_keys.clear();
+        self.routed = None;
         self.capture.release().await
     }
 
@@ -226,6 +320,8 @@ impl InputCapture {
             pending: Default::default(),
             position_map: Default::default(),
             pressed_keys: HashSet::new(),
+            gates: Default::default(),
+            routed: None,
         })
     }
 
@@ -276,29 +372,22 @@ impl Stream for InputCapture {
             self.update_pressed_keys(key, state);
         }
 
-        let len = self
-            .position_map
-            .get(&pos)
-            .map(|ids| ids.len())
-            .unwrap_or(0);
+        match event {
+            CaptureEvent::BeginAt(point) => self.routed = Some((pos, self.route(pos, point))),
+            CaptureEvent::Begin => self.routed = None,
+            CaptureEvent::Input(_) => {}
+        }
+        let ids = match &self.routed {
+            Some((routed_pos, ids)) if *routed_pos == pos => ids.clone(),
+            _ => self.position_map.get(&pos).cloned().unwrap_or_default(),
+        };
 
-        match len {
-            0 => Poll::Pending,
-            1 => Poll::Ready(Some(Ok((
-                self.position_map.get(&pos).expect("no id")[0],
-                event,
-            )))),
-            _ => {
-                let mut position_map = HashMap::new();
-                swap(&mut self.position_map, &mut position_map);
-                {
-                    for &id in position_map.get(&pos).expect("position") {
-                        self.pending.push_back((id, event));
-                    }
-                }
-                swap(&mut self.position_map, &mut position_map);
-
-                Poll::Ready(Some(Ok(self.pending.pop_front().expect("event"))))
+        match ids.as_slice() {
+            [] => Poll::Pending,
+            [id] => Poll::Ready(Some(Ok((*id, event)))),
+            [first, rest @ ..] => {
+                self.pending.extend(rest.iter().map(|&id| (id, event)));
+                Poll::Ready(Some(Ok((*first, event))))
             }
         }
     }
@@ -314,6 +403,10 @@ trait Capture: Stream<Item = Result<(Position, CaptureEvent), CaptureError>> + U
 
     /// release mouse
     async fn release(&mut self) -> Result<(), CaptureError>;
+
+    /// let the pointer leave at `pos` only through `gates`, anywhere with
+    /// `None`
+    fn set_gates(&mut self, _pos: Position, _gates: Option<Vec<Gate>>) {}
 
     /// destroy the input capture
     async fn terminate(&mut self) -> Result<(), CaptureError>;

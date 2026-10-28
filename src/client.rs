@@ -7,7 +7,7 @@ use std::{
 
 use slab::Slab;
 
-use lan_mouse_ipc::{ClientConfig, ClientHandle, ClientState, DisplayInfo, Position};
+use lan_mouse_ipc::{ClientConfig, ClientHandle, ClientState, DisplayInfo, Placement, Position};
 
 use crate::config::ConfigClient;
 
@@ -34,6 +34,7 @@ impl ClientManager {
             pos: config_client.pos,
             cmd: config_client.enter_hook,
             leave_cmd: config_client.leave_hook,
+            placement: config_client.placement,
         };
         let state = ClientState {
             active: config_client.active,
@@ -128,6 +129,14 @@ impl ClientManager {
             .borrow_mut()
             .get_mut(handle as usize)
             .and_then(|(c, _)| c.hostname.clone())
+    }
+
+    /// where the client was placed on the canvas, if it was
+    pub(crate) fn get_placement(&self, handle: ClientHandle) -> Option<Placement> {
+        self.clients
+            .borrow()
+            .get(handle as usize)
+            .and_then(|(c, _)| c.placement)
     }
 
     /// get the position of the corresponding client
@@ -227,6 +236,13 @@ impl ClientManager {
                 s.active
             }
             _ => false,
+        }
+    }
+
+    /// place the client on the canvas, or take it off
+    pub(crate) fn set_placement(&self, handle: ClientHandle, placement: Option<Placement>) {
+        if let Some((c, _s)) = self.clients.borrow_mut().get_mut(handle as usize) {
+            c.placement = placement;
         }
     }
 

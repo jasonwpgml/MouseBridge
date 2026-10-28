@@ -1,5 +1,5 @@
 use super::{Capture, CaptureError, CaptureEvent, Position, error::MacosCaptureCreationError};
-use crate::{KeyboardCapture, keyboard_capture};
+use crate::{Gate, KeyboardCapture, keyboard_capture, passes};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use core_foundation::{
@@ -11,7 +11,7 @@ use core_foundation::{
 };
 use core_graphics::{
     base::{CGError, kCGErrorSuccess},
-    display::{CGDisplay, CGPoint},
+    display::{CGDisplay, CGPoint, CGRect},
     event::{
         CGEvent, CGEventField, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions,
         CGEventTapPlacement, CGEventTapProxy, CGEventType, CallbackResult, EventField,
@@ -26,7 +26,7 @@ use keycode::{KeyMap, KeyMapping};
 use libc::c_void;
 use once_cell::unsync::Lazy;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ffi::{CString, c_char},
     pin::Pin,
     sync::{Arc, OnceLock},
@@ -39,14 +39,6 @@ use tokio::sync::{
     oneshot,
 };
 
-#[derive(Debug, Default)]
-struct Bounds {
-    xmin: f64,
-    xmax: f64,
-    ymin: f64,
-    ymax: f64,
-}
-
 #[derive(Debug)]
 struct InputCaptureState {
     /// active capture positions
@@ -55,8 +47,10 @@ struct InputCaptureState {
     current_pos: Option<Position>,
     /// position where the cursor was captured
     enter_position: Option<CGPoint>,
-    /// bounds of the input capture area
-    bounds: Bounds,
+    /// bounds of the displays
+    displays: Vec<CGRect>,
+    /// where the pointer may leave at a position, anywhere if not given
+    gates: HashMap<Position, Vec<Gate>>,
     /// current state of modifier keys
     modifier_state: XMods,
 }
@@ -67,6 +61,7 @@ enum ProducerEvent {
     Create(Position),
     Destroy(Position),
     Grab(Position),
+    SetGates(Position, Option<Vec<Gate>>),
     EventTapDisabled,
     DisplayReconfigured,
 }
@@ -77,60 +72,81 @@ impl InputCaptureState {
             active_clients: Lazy::new(HashSet::new),
             current_pos: None,
             enter_position: None,
-            bounds: Bounds::default(),
+            displays: Vec::new(),
+            gates: HashMap::new(),
             modifier_state: Default::default(),
         };
-        res.update_bounds()?;
+        res.update_displays()?;
         Ok(res)
     }
 
-    fn crossed(&mut self, event: &CGEvent) -> Option<Position> {
+    /// The position the pointer left the display it was on through, onto no
+    /// other display, and the display, if a client is there and a gate lets
+    /// it through.
+    fn crossed(&mut self, event: &CGEvent) -> Option<(Position, CGRect)> {
         let location = event.location();
-        let relative_x = event.get_double_value_field(EventField::MOUSE_EVENT_DELTA_X);
-        let relative_y = event.get_double_value_field(EventField::MOUSE_EVENT_DELTA_Y);
-
-        for &position in self.active_clients.iter() {
-            if (position == Position::Left && (location.x + relative_x) <= self.bounds.xmin)
-                || (position == Position::Right && (location.x + relative_x) >= self.bounds.xmax)
-                || (position == Position::Top && (location.y + relative_y) <= self.bounds.ymin)
-                || (position == Position::Bottom && (location.y + relative_y) >= self.bounds.ymax)
-            {
-                log::debug!("Crossed barrier into position: {position:?}");
-                return Some(position);
-            }
+        let target = CGPoint::new(
+            location.x + event.get_double_value_field(EventField::MOUSE_EVENT_DELTA_X),
+            location.y + event.get_double_value_field(EventField::MOUSE_EVENT_DELTA_Y),
+        );
+        if self.displays.iter().any(|d| contains(d, target)) {
+            return None;
         }
-        None
+        let display = *self.displays.iter().find(|d| contains(d, location))?;
+        let position = if target.x < display.origin.x {
+            Position::Left
+        } else if target.x >= display.origin.x + display.size.width {
+            Position::Right
+        } else if target.y < display.origin.y {
+            Position::Top
+        } else {
+            Position::Bottom
+        };
+        if !self.active_clients.contains(&position) {
+            return None;
+        }
+        if !passes(self.gates.get(&position), position, pointer(location)) {
+            log::trace!("no gate at {position} {location:?}");
+            return None;
+        }
+        log::debug!("Crossed barrier into position: {position:?}");
+        Some((position, display))
     }
 
-    // Get the max bounds of all displays
-    fn update_bounds(&mut self) -> Result<(), MacosCaptureCreationError> {
+    fn update_displays(&mut self) -> Result<(), MacosCaptureCreationError> {
         let active_ids =
             CGDisplay::active_displays().map_err(MacosCaptureCreationError::ActiveDisplays)?;
-        active_ids.iter().for_each(|d| {
-            let bounds = CGDisplay::new(*d).bounds();
-            self.bounds.xmin = self.bounds.xmin.min(bounds.origin.x);
-            self.bounds.xmax = self.bounds.xmax.max(bounds.origin.x + bounds.size.width);
-            self.bounds.ymin = self.bounds.ymin.min(bounds.origin.y);
-            self.bounds.ymax = self.bounds.ymax.max(bounds.origin.y + bounds.size.height);
-        });
-
-        log::debug!("Updated displays bounds: {0:?}", self.bounds);
+        self.displays = active_ids
+            .iter()
+            .map(|d| CGDisplay::new(*d).bounds())
+            .collect();
+        log::debug!("Updated displays: {:?}", self.displays);
         Ok(())
     }
 
-    /// start the input capture by
-    fn start_capture(&mut self, event: &CGEvent, position: Position) -> Result<(), CaptureError> {
+    /// Starts the input capture, holding the cursor just inside the edge it
+    /// left `display` through. Returns where it left, in pointer
+    /// coordinates.
+    fn start_capture(
+        &mut self,
+        event: &CGEvent,
+        position: Position,
+        display: CGRect,
+    ) -> Result<(i32, i32), CaptureError> {
         let mut location = event.location();
+        let left = pointer(location);
         let edge_offset = 1.0;
-        // move cursor location to display bounds
+        let (x0, y0) = (display.origin.x, display.origin.y);
+        let (x1, y1) = (x0 + display.size.width, y0 + display.size.height);
         match position {
-            Position::Left => location.x = self.bounds.xmin + edge_offset,
-            Position::Right => location.x = self.bounds.xmax - edge_offset,
-            Position::Top => location.y = self.bounds.ymin + edge_offset,
-            Position::Bottom => location.y = self.bounds.ymax - edge_offset,
+            Position::Left => location.x = x0 + edge_offset,
+            Position::Right => location.x = x1 - edge_offset,
+            Position::Top => location.y = y0 + edge_offset,
+            Position::Bottom => location.y = y1 - edge_offset,
         };
         self.enter_position = Some(location);
-        self.reset_cursor()
+        self.reset_cursor()?;
+        Ok(left)
     }
 
     /// resets the cursor to the position, where the capture started
@@ -169,6 +185,15 @@ impl InputCaptureState {
             ProducerEvent::Create(p) => {
                 self.active_clients.insert(p);
             }
+            ProducerEvent::SetGates(p, gates) => match gates {
+                Some(gates) => {
+                    log::debug!("gates at {p}: {gates:?}");
+                    self.gates.insert(p, gates);
+                }
+                None => {
+                    self.gates.remove(&p);
+                }
+            },
             ProducerEvent::Destroy(p) => {
                 if let Some(current) = self.current_pos {
                     if current == p {
@@ -197,10 +222,10 @@ impl InputCaptureState {
                 // cursor-warp on capture-start use the current
                 // geometry instead of whatever was true at process
                 // start.
-                if let Err(e) = self.update_bounds() {
+                if let Err(e) = self.update_displays() {
                     log::warn!("failed to refresh display bounds: {e}");
                 } else {
-                    log::info!("display reconfigured: {:?}", self.bounds);
+                    log::info!("display reconfigured: {:?}", self.displays);
                 }
             }
         };
@@ -417,6 +442,16 @@ fn get_events(
     Ok(())
 }
 
+fn contains(display: &CGRect, p: CGPoint) -> bool {
+    let (x, y) = (display.origin.x, display.origin.y);
+    x <= p.x && p.x < x + display.size.width && y <= p.y && p.y < y + display.size.height
+}
+
+/// a location in whole pointer coordinates
+fn pointer(p: CGPoint) -> (i32, i32) {
+    (p.x.floor() as i32, p.y.floor() as i32)
+}
+
 fn create_event_tap<'a>(
     client_state: Arc<Mutex<InputCaptureState>>,
     notify_tx: Sender<ProducerEvent>,
@@ -566,12 +601,15 @@ fn create_event_tap<'a>(
             }
         } else if matches!(event_type, CGEventType::MouseMoved) {
             // Did we cross a barrier?
-            if let Some(new_pos) = state.crossed(cg_ev) {
+            if let Some((new_pos, display)) = state.crossed(cg_ev) {
                 capture_position = Some(new_pos);
-                state
-                    .start_capture(cg_ev, new_pos)
-                    .unwrap_or_else(|e| log::warn!("{e}"));
-                res_events.push(CaptureEvent::Begin);
+                let left = state
+                    .start_capture(cg_ev, new_pos, display)
+                    .unwrap_or_else(|e| {
+                        log::warn!("{e}");
+                        pointer(cg_ev.location())
+                    });
+                res_events.push(CaptureEvent::BeginAt(left));
                 notify_tx
                     .blocking_send(ProducerEvent::Grab(new_pos))
                     .expect("Failed to send notification");
@@ -828,6 +866,13 @@ impl Capture for MacOSInputCapture {
             let _ = notify_tx.send(ProducerEvent::Release).await;
         });
         Ok(())
+    }
+
+    fn set_gates(&mut self, pos: Position, gates: Option<Vec<Gate>>) {
+        let notify_tx = self.notify_tx.clone();
+        tokio::task::spawn_local(async move {
+            let _ = notify_tx.send(ProducerEvent::SetGates(pos, gates)).await;
+        });
     }
 
     async fn terminate(&mut self) -> Result<(), CaptureError> {

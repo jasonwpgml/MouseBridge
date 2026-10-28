@@ -11,6 +11,10 @@ use std::time::Duration;
 use tokio::task::AbortHandle;
 use windows::Win32::Foundation::{LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI,
+    SetThreadDpiAwarenessContext,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE,
     MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN,
@@ -26,7 +30,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, XBUTTON1, XBUTTON2,
+    SM_YVIRTUALSCREEN, SetCursorPos, XBUTTON1, XBUTTON2,
 };
 use windows::core::BOOL;
 
@@ -123,6 +127,20 @@ impl Emulation for WindowsEmulation {
     async fn terminate(&mut self) {
         for (_, mut cursor) in self.second_cursors.drain() {
             cursor.release_buttons();
+        }
+    }
+
+    async fn enter_at(&mut self, handle: EmulationHandle, point: (i32, i32)) {
+        let at = to_physical(point);
+        log::debug!("entering at {point:?}, {at:?} in pixels");
+        match self.second_cursors.get_mut(&handle) {
+            Some(cursor) => {
+                cursor.pointer = Pointer::new(at);
+                if let Some(overlay) = &cursor.overlay {
+                    overlay.move_to(at);
+                }
+            }
+            None => set_cursor_position(at),
         }
     }
 
@@ -262,6 +280,56 @@ fn default_position(displays: &[Rect]) -> (i32, i32) {
         .find(|d| d.left <= 0 && 0 < d.right && d.top <= 0 && 0 < d.bottom)
         .or(displays.first());
     primary.map_or((0, 0), |d| ((d.left + d.right) / 2, d.bottom - 1))
+}
+
+/// A point in device-independent coordinates (physical pixels divided by the
+/// display's scaling, as the display was reported to other devices) in
+/// physical pixels.
+fn to_physical((x, y): (i32, i32)) -> (i32, i32) {
+    unsafe extern "system" fn add(
+        monitor: HMONITOR,
+        _: HDC,
+        rect: *mut RECT,
+        data: LPARAM,
+    ) -> BOOL {
+        let displays = unsafe { &mut *(data.0 as *mut Vec<(RECT, i32)>) };
+        let (mut dpi_x, mut dpi_y) = (96, 96);
+        let _ = unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
+        displays.push((unsafe { *rect }, (dpi_x * 100 / 96).max(1) as i32));
+        true.into()
+    }
+    let mut displays: Vec<(RECT, i32)> = Vec::new();
+    unsafe {
+        let previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        let _ = EnumDisplayMonitors(
+            None,
+            None,
+            Some(add),
+            LPARAM(&mut displays as *mut Vec<(RECT, i32)> as isize),
+        );
+        SetThreadDpiAwarenessContext(previous);
+    }
+    let dip = |r: &RECT, scale: i32| {
+        let (left, top) = (r.left * 100 / scale, r.top * 100 / scale);
+        let (right, bottom) = (r.right * 100 / scale, r.bottom * 100 / scale);
+        left <= x && x < right && top <= y && y < bottom
+    };
+    let scale = displays
+        .iter()
+        .find(|(r, scale)| dip(r, *scale))
+        .map_or(100, |&(_, scale)| scale);
+    (x * scale / 100, y * scale / 100)
+}
+
+/// moves the system cursor to a point in physical pixels
+fn set_cursor_position((x, y): (i32, i32)) {
+    unsafe {
+        let previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        if let Err(e) = SetCursorPos(x, y) {
+            log::warn!("could not move the cursor to {x},{y}: {e}");
+        }
+        SetThreadDpiAwarenessContext(previous);
+    }
 }
 
 fn cursor_position() -> Option<(i32, i32)> {

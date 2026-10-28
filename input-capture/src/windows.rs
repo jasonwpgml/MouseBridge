@@ -7,7 +7,7 @@ use std::pin::Pin;
 use std::task::ready;
 use tokio::sync::mpsc::{Receiver, channel};
 
-use super::{Capture, CaptureError, CaptureEvent, Position};
+use super::{Capture, CaptureError, CaptureEvent, Gate, Position};
 
 mod display_util;
 mod event_thread;
@@ -36,6 +36,10 @@ impl Capture for WindowsInputCapture {
 
     async fn terminate(&mut self) -> Result<(), CaptureError> {
         Ok(())
+    }
+
+    fn set_gates(&mut self, pos: Position, gates: Option<Vec<Gate>>) {
+        self.event_thread.set_gates(pos, gates);
     }
 }
 

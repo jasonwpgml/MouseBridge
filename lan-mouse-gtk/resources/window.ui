@@ -199,6 +199,12 @@
                       </object>
                     </child>
                     <child>
+                      <object class="AdwPreferencesGroup" id="layout_group">
+                        <property name="title" translatable="yes">Layout</property>
+                        <property name="description" translatable="yes">Drag a device to move it, drag its corner to resize it, double-click it for its real size. The pointer crosses where displays touch.</property>
+                      </object>
+                    </child>
+                    <child>
                       <object class="AdwPreferencesGroup">
                         <property name="title" translatable="yes">Connections</property>
                         <property name="header-suffix">

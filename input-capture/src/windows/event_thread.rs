@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ptr::addr_of_mut;
 
 use std::default::Default;
@@ -32,6 +32,7 @@ use input_event::{
 };
 
 use super::{CaptureEvent, Position, display_util};
+use crate::{Gate, passes};
 use crate::{KeyboardCapture, keyboard_capture};
 
 pub(crate) struct EventThread {
@@ -61,6 +62,10 @@ impl EventThread {
 
     pub(crate) fn destroy(&self, pos: Position) {
         self.client_update(ClientUpdate::Destroy(pos));
+    }
+
+    pub(crate) fn set_gates(&self, pos: Position, gates: Option<Vec<Gate>>) {
+        self.client_update(ClientUpdate::SetGates(pos, gates));
     }
 
     fn exit(&self) {
@@ -97,6 +102,7 @@ enum RequestType {
 enum ClientUpdate {
     Create(Position),
     Destroy(Position),
+    SetGates(Position, Option<Vec<Gate>>),
 }
 
 fn blocking_send_event(pos: Position, event: CaptureEvent) {
@@ -113,6 +119,8 @@ fn try_send_event(
 thread_local! {
     /// all configured clients
     static CLIENTS: RefCell<HashSet<Position>> = RefCell::new(HashSet::new());
+    /// where the pointer may leave at a position, anywhere if not given
+    static GATES: RefCell<HashMap<Position, Vec<Gate>>> = RefCell::new(HashMap::new());
     /// currently active client
     static ACTIVE_CLIENT: Cell<Option<Position>> = const { Cell::new(None) };
     /// input event channel
@@ -290,17 +298,23 @@ fn check_client_activation(wparam: WPARAM, lparam: LPARAM) -> bool {
         return ret;
     }
 
-    /* update active client and entry point */
-    ACTIVE_CLIENT.replace(Some(pos));
     let entry_point = DISPLAYS.with_borrow(|(displays, _)| {
         display_util::clamp_to_display_bounds(displays, prev_pos, curr_pos)
     });
+
+    /* only through a gate, if there are any */
+    if !GATES.with_borrow(|gates| passes(gates.get(&pos), pos, entry_point)) {
+        log::trace!("no gate at {pos} {entry_point:?}");
+        return ret;
+    }
+
+    /* update active client and entry point */
+    ACTIVE_CLIENT.replace(Some(pos));
     ENTRY_POINT.replace(entry_point);
 
     /* notify main thread */
     log::debug!("ENTERED @ {prev_pos:?} -> {curr_pos:?}");
-    let active = ACTIVE_CLIENT.get().expect("active client");
-    blocking_send_event(active, CaptureEvent::Begin);
+    blocking_send_event(pos, CaptureEvent::BeginAt(entry_point));
 
     ret
 }
@@ -436,6 +450,13 @@ fn update_clients(request: ClientUpdate) {
                 }
             }
             CLIENTS.with_borrow_mut(|clients| clients.remove(&pos));
+        }
+        ClientUpdate::SetGates(pos, gates) => {
+            log::debug!("gates at {pos}: {gates:?}");
+            GATES.with_borrow_mut(|all| match gates {
+                Some(gates) => all.insert(pos, gates),
+                None => all.remove(&pos),
+            });
         }
     }
 }

@@ -7,8 +7,8 @@ use std::{
 
 use futures::StreamExt;
 use input_capture::{
-    CaptureError, CaptureEvent, CaptureHandle, InputCapture, InputCaptureError, KeyboardCapture,
-    Position,
+    CaptureError, CaptureEvent, CaptureHandle, Gate, InputCapture, InputCaptureError,
+    KeyboardCapture, Position,
 };
 use input_event::{Event, KeyboardEvent, scancode};
 use lan_mouse_proto::ProtoEvent;
@@ -16,7 +16,7 @@ use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
 use tokio_util::sync::CancellationToken;
 
-use crate::{connect::LanMouseConnection, key_remap::KeyRemap};
+use crate::{connect::LanMouseConnection, key_remap::KeyRemap, layout::Portal};
 
 pub(crate) struct Capture {
     cancellation_token: CancellationToken,
@@ -74,6 +74,20 @@ enum CaptureRequest {
     SetKeyRemap(CaptureHandle, Option<KeyRemap>),
     /// choose where keyboard input goes
     SetKeyboard(KeyboardRoute),
+    /// let the pointer reach a client only through these passages, or
+    /// anywhere along its edge with `None`
+    SetPassages(CaptureHandle, Option<Vec<Passage>>),
+}
+
+/// A portal to a client and the gate it is in this device's pointer
+/// coordinates.
+#[derive(Clone, Debug)]
+pub(crate) struct Passage {
+    pub gate: Gate,
+    pub portal: Portal,
+    /// pointer units per device-independent unit on the portal's display, in
+    /// percent
+    pub pointer_scale: i32,
 }
 
 /// where keyboard input goes
@@ -106,6 +120,7 @@ impl Capture {
             event_tx,
             key_remaps: Default::default(),
             keyboard: Default::default(),
+            passages: Default::default(),
             ack_deadline: None,
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
@@ -175,6 +190,12 @@ impl Capture {
     pub(crate) fn set_keyboard(&self, route: KeyboardRoute) {
         let _ = self.request_tx.send(CaptureRequest::SetKeyboard(route));
     }
+
+    pub(crate) fn set_passages(&self, handle: CaptureHandle, passages: Option<Vec<Passage>>) {
+        let _ = self
+            .request_tx
+            .send(CaptureRequest::SetPassages(handle, passages));
+    }
 }
 
 /// debounce a statement `$st`, i.e. the statement is executed only if the
@@ -203,6 +224,7 @@ struct CaptureTask {
     event_tx: Sender<ICaptureEvent>,
     key_remaps: HashMap<CaptureHandle, KeyRemap>,
     keyboard: KeyboardRoute,
+    passages: HashMap<CaptureHandle, Vec<Passage>>,
     /// when to give up on a client that has not acknowledged entering it
     ack_deadline: Option<Instant>,
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
@@ -242,6 +264,32 @@ impl CaptureTask {
                 }),
         };
         input_capture::set_keyboard_capture(capture);
+    }
+
+    fn set_passages(&mut self, handle: CaptureHandle, passages: Option<Vec<Passage>>) {
+        match passages {
+            Some(passages) => self.passages.insert(handle, passages),
+            None => self.passages.remove(&handle),
+        };
+    }
+
+    fn gates(&self, handle: CaptureHandle) -> Option<Vec<Gate>> {
+        let passages = self.passages.get(&handle)?;
+        Some(passages.iter().map(|p| p.gate).collect())
+    }
+
+    /// where the pointer enters the client, having left at `point` in
+    /// pointer coordinates
+    fn entry_point(&self, handle: CaptureHandle, point: (i32, i32)) -> Option<(i32, i32)> {
+        let side = self.get_pos(handle);
+        let passage = self
+            .passages
+            .get(&handle)?
+            .iter()
+            .find(|p| p.gate.contains(side, point))?;
+        let scale = passage.pointer_scale.max(1);
+        let point = (point.0 * 100 / scale, point.1 * 100 / scale);
+        Some(passage.portal.entry_point(point))
     }
 
     fn set_key_remap(&mut self, handle: CaptureHandle, remap: Option<KeyRemap>) {
@@ -297,6 +345,7 @@ impl CaptureTask {
                         }
                         CaptureRequest::SetKeyRemap(h, r) => self.set_key_remap(h, r),
                         CaptureRequest::SetKeyboard(route) => self.set_keyboard(route),
+                        CaptureRequest::SetPassages(h, p) => self.set_passages(h, p),
                     },
                     _ = self.cancellation_token.cancelled() => return,
                 }
@@ -339,6 +388,7 @@ impl CaptureTask {
                 r = capture.create(handle, pos) => r?,
                 _ = self.cancellation_token.cancelled() => return Ok(()),
             }
+            capture.set_gates(handle, self.gates(handle));
         }
         Ok(())
     }
@@ -389,6 +439,7 @@ impl CaptureTask {
                     CaptureRequest::Create(h, p, t) => {
                         self.add_capture(h, p, t);
                         capture.create(h, p).await?;
+                        capture.set_gates(h, self.gates(h));
                     }
                     CaptureRequest::Destroy(h) => {
                         // If the capture we're tearing down is the
@@ -409,6 +460,10 @@ impl CaptureTask {
                     }
                     CaptureRequest::SetKeyRemap(h, r) => self.set_key_remap(h, r),
                     CaptureRequest::SetKeyboard(route) => self.set_keyboard(route),
+                    CaptureRequest::SetPassages(h, p) => {
+                        self.set_passages(h, p);
+                        capture.set_gates(h, self.gates(h));
+                    }
                 },
                 _ = self.cancellation_token.cancelled() => break,
             }
@@ -448,7 +503,8 @@ impl CaptureTask {
             return Ok(());
         }
 
-        if event == CaptureEvent::Begin {
+        let begin = matches!(event, CaptureEvent::Begin | CaptureEvent::BeginAt(_));
+        if begin {
             self.event_tx
                 .send(ICaptureEvent::CaptureBegin(handle))
                 .expect("channel closed");
@@ -467,7 +523,7 @@ impl CaptureTask {
         }
 
         // activated a new client
-        if event == CaptureEvent::Begin && Some(handle) != self.active_client {
+        if begin && Some(handle) != self.active_client {
             self.state = State::WaitingForAck;
             self.ack_deadline = Some(Instant::now() + ACK_TIMEOUT);
             self.active_client.replace(handle);
@@ -478,8 +534,12 @@ impl CaptureTask {
 
         let opposite_pos = to_proto_pos(self.get_pos(handle).opposite());
 
+        let entry = match event {
+            CaptureEvent::BeginAt(point) => self.entry_point(handle, point),
+            _ => None,
+        };
         let event = match event {
-            CaptureEvent::Begin => ProtoEvent::Enter(opposite_pos),
+            CaptureEvent::Begin | CaptureEvent::BeginAt(_) => ProtoEvent::Enter(opposite_pos),
             CaptureEvent::Input(e) => match self.state {
                 // connection not acknowledged, repeat `Enter` event
                 State::WaitingForAck => ProtoEvent::Enter(opposite_pos),
@@ -487,7 +547,12 @@ impl CaptureTask {
             },
         };
 
-        if let Err(e) = self.conn.send(event, handle).await {
+        let mut sent = self.conn.send(event, handle).await;
+        if let (Ok(()), Some((x, y))) = (&sent, entry) {
+            log::debug!("entering client {handle} at {x},{y}");
+            sent = self.conn.send(ProtoEvent::EnterAt { x, y }, handle).await;
+        }
+        if let Err(e) = sent {
             const DUR: Duration = Duration::from_millis(500);
             debounce!(PREV_LOG, DUR, log::warn!("releasing capture: {e}"));
             // Funnel through release_capture so the leave_hook
@@ -578,7 +643,7 @@ enum State {
     Sending,
 }
 
-fn to_capture_pos(pos: lan_mouse_ipc::Position) -> input_capture::Position {
+pub(crate) fn to_capture_pos(pos: lan_mouse_ipc::Position) -> input_capture::Position {
     match pos {
         lan_mouse_ipc::Position::Left => input_capture::Position::Left,
         lan_mouse_ipc::Position::Right => input_capture::Position::Right,

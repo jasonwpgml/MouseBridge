@@ -17,7 +17,7 @@ use toml;
 use toml_edit::{self, DocumentMut};
 
 use lan_mouse_cli::CliArgs;
-use lan_mouse_ipc::{DEFAULT_PORT, KeyboardMode, Position};
+use lan_mouse_ipc::{DEFAULT_PORT, KeyboardMode, Placement, Position};
 
 use input_event::scancode::{
     self,
@@ -107,6 +107,8 @@ struct ConfigToml {
     second_cursor: Option<bool>,
     /// where keyboard input goes: "follow" (default), "local" or a hostname
     keyboard: Option<String>,
+    /// where this device sits on the canvas the devices are arranged on
+    placement: Option<Placement>,
     clients: Option<Vec<TomlClient>>,
     authorized_fingerprints: Option<HashMap<String, String>>,
     /// per-client key remapping, keyed by client hostname
@@ -123,6 +125,7 @@ struct TomlClient {
     activate_on_startup: Option<bool>,
     enter_hook: Option<String>,
     leave_hook: Option<String>,
+    placement: Option<Placement>,
 }
 
 impl ConfigToml {
@@ -319,6 +322,7 @@ pub struct ConfigClient {
     pub active: bool,
     pub enter_hook: Option<String>,
     pub leave_hook: Option<String>,
+    pub placement: Option<Placement>,
 }
 
 impl From<TomlClient> for ConfigClient {
@@ -338,6 +342,7 @@ impl From<TomlClient> for ConfigClient {
             active,
             enter_hook,
             leave_hook,
+            placement: toml.placement,
         }
     }
 }
@@ -367,6 +372,7 @@ impl From<ConfigClient> for TomlClient {
             activate_on_startup,
             enter_hook,
             leave_hook,
+            placement: client.placement,
         }
     }
 }
@@ -568,6 +574,18 @@ impl Config {
         )
     }
 
+    /// where this device sits on the canvas
+    pub fn placement(&self) -> Placement {
+        self.config_toml
+            .as_ref()
+            .and_then(|c| c.placement)
+            .unwrap_or_default()
+    }
+
+    pub fn set_placement(&mut self, placement: Placement) {
+        self.config_toml.get_or_insert_default().placement = Some(placement);
+    }
+
     pub fn set_keyboard_mode(&mut self, mode: &KeyboardMode) {
         self.config_toml.get_or_insert_default().keyboard = keyboard_mode_value(mode);
     }
@@ -685,6 +703,35 @@ second_cursor = true
 KeyLeftMeta = "KeyLeftCtrl"
 KeyF18 = "KeyHanguel"
 "#;
+
+    #[test]
+    fn placements_survive_write_back() {
+        let doc = r#"
+placement = { x = 200, y = 1080 }
+
+[[clients]]
+hostname = "DESKTOP-SN73G0N"
+placement = { x = 0, y = 0, size = 80 }
+"#
+        .parse::<DocumentMut>()
+        .unwrap();
+        let config: ConfigToml = toml_edit::de::from_document(doc).unwrap();
+        // size defaults to the real size
+        assert_eq!(
+            config.placement,
+            Some(Placement {
+                x: 200,
+                y: 1080,
+                size: 100
+            })
+        );
+        let written = toml_edit::ser::to_string_pretty(&config).unwrap();
+        let doc = written.parse::<DocumentMut>().unwrap();
+        let read: ConfigToml = toml_edit::de::from_document(doc).unwrap();
+        assert_eq!(read, config);
+        let client = &read.clients.unwrap()[0];
+        assert_eq!(client.placement.map(|p| p.size), Some(80));
+    }
 
     #[test]
     fn parses_key_remap() {

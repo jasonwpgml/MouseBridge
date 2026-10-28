@@ -85,6 +85,10 @@ pub enum ProtoEvent {
         height: i32,
         scale: u16,
     },
+    /// Where the cursor enters, sent before [`ProtoEvent::Enter`]: a point
+    /// in the receiver's device-independent display coordinates (see
+    /// [`ProtoEvent::Display`]).
+    EnterAt { x: i32, y: i32 },
 }
 
 impl Display for ProtoEvent {
@@ -119,6 +123,7 @@ impl Display for ProtoEvent {
                 "Display({}/{count}: {width}x{height}@{x},{y} {scale}%)",
                 index + 1
             ),
+            ProtoEvent::EnterAt { x, y } => write!(f, "EnterAt({x},{y})"),
         }
     }
 }
@@ -139,6 +144,7 @@ pub enum EventType {
     Ack,
     Hello,
     Display,
+    EnterAt,
 }
 
 impl ProtoEvent {
@@ -163,6 +169,7 @@ impl ProtoEvent {
             ProtoEvent::Ack(_) => EventType::Ack,
             ProtoEvent::Hello { .. } => EventType::Hello,
             ProtoEvent::Display { .. } => EventType::Display,
+            ProtoEvent::EnterAt { .. } => EventType::EnterAt,
         }
     }
 }
@@ -232,6 +239,10 @@ impl TryFrom<[u8; MAX_EVENT_SIZE]> for ProtoEvent {
                 width: decode_i32(&mut buf)?,
                 height: decode_i32(&mut buf)?,
                 scale: decode_u16(&mut buf)?,
+            }),
+            EventType::EnterAt => Ok(Self::EnterAt {
+                x: decode_i32(&mut buf)?,
+                y: decode_i32(&mut buf)?,
             }),
         }
     }
@@ -319,6 +330,10 @@ impl From<ProtoEvent> for ([u8; MAX_EVENT_SIZE], usize) {
                     encode_i32(buf, len, height);
                     encode_u16(buf, len, scale);
                 }
+                ProtoEvent::EnterAt { x, y } => {
+                    encode_i32(buf, len, x);
+                    encode_i32(buf, len, y);
+                }
             }
         }
         (buf, len)
@@ -398,5 +413,14 @@ mod tests {
             (index, count, x, y, width, height, scale),
             (1, 2, 1920, -155, 1080, 1920, 125)
         );
+    }
+
+    #[test]
+    fn enter_point_round_trips() {
+        let (buf, _) = ProtoEvent::EnterAt { x: -300, y: 1079 }.into();
+        let ProtoEvent::EnterAt { x, y } = ProtoEvent::try_from(buf).unwrap() else {
+            panic!("not an entry point");
+        };
+        assert_eq!((x, y), (-300, 1079));
     }
 }

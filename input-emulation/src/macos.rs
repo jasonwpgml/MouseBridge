@@ -7,7 +7,7 @@ use core_foundation_sys::preferences::{
 };
 use core_graphics::base::CGFloat;
 use core_graphics::display::{
-    CGDirectDisplayID, CGDisplayBounds, CGGetDisplaysWithRect, CGPoint, CGRect, CGSize,
+    CGDirectDisplayID, CGDisplay, CGDisplayBounds, CGGetDisplaysWithRect, CGPoint, CGRect, CGSize,
 };
 use core_graphics::event::{
     CGEvent, CGEventFlags, CGEventTapLocation, CGEventType, CGKeyCode, CGMouseButton, EventField,
@@ -639,6 +639,13 @@ impl Emulation for MacOSEmulation {
     }
 
     async fn create(&mut self, _handle: EmulationHandle) {}
+
+    async fn enter_at(&mut self, _handle: EmulationHandle, (x, y): (i32, i32)) {
+        // points are this backend's coordinates already
+        if let Err(e) = CGDisplay::warp_mouse_cursor_position(CGPoint::new(x as f64, y as f64)) {
+            log::warn!("could not move the cursor to {x},{y}: {e}");
+        }
+    }
 
     async fn destroy(&mut self, _handle: EmulationHandle) {}
 
