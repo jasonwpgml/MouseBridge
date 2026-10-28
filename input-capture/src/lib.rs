@@ -247,20 +247,46 @@ impl InputCapture {
         self.capture.set_gates(pos, gates);
     }
 
-    /// the handles at `pos` a capture beginning at `point` goes to: those
-    /// with a gate there and those without gates
-    fn route(&self, pos: Position, point: (i32, i32)) -> Vec<CaptureHandle> {
+    /// The handles at `pos` a capture beginning at `point` goes to, all of
+    /// them with `None`. Where handles have gates the edge is shared, so
+    /// input never goes to more than one of them: the one with a gate at
+    /// `point`, else those without gates, else the one with the nearest
+    /// gate.
+    fn route(&self, pos: Position, point: Option<(i32, i32)>) -> Option<Vec<CaptureHandle>> {
         let ids = self.position_map.get(&pos).cloned().unwrap_or_default();
-        let routed = ids
-            .iter()
-            .copied()
-            .filter(|id| {
-                self.gates
-                    .get(id)
-                    .is_none_or(|gates| gates.iter().any(|g| g.contains(pos, point)))
-            })
-            .collect::<Vec<_>>();
-        if routed.is_empty() { ids } else { routed }
+        let (gated, ungated): (Vec<_>, Vec<_>) =
+            ids.into_iter().partition(|id| self.gates.contains_key(id));
+        if gated.is_empty() {
+            return None;
+        }
+        let gates = |id: &CaptureHandle| self.gates[id].iter();
+        if let Some(point) = point {
+            if let Some(&id) = gated
+                .iter()
+                .find(|id| gates(id).any(|g| g.contains(pos, point)))
+            {
+                return Some(vec![id]);
+            }
+        }
+        if !ungated.is_empty() {
+            return Some(ungated);
+        }
+        let along = |(x, y): (i32, i32)| match pos {
+            Position::Left | Position::Right => y,
+            Position::Top | Position::Bottom => x,
+        };
+        let distance = |id: &CaptureHandle| {
+            let Some(point) = point else { return 0 };
+            gates(id)
+                .map(|g| {
+                    (g.from - along(point))
+                        .max(along(point) - (g.to - 1))
+                        .max(0)
+                })
+                .min()
+                .unwrap_or(i32::MAX)
+        };
+        gated.into_iter().min_by_key(distance).map(|id| vec![id])
     }
 
     /// destroy the client with the given id, if it exists
@@ -373,8 +399,10 @@ impl Stream for InputCapture {
         }
 
         match event {
-            CaptureEvent::BeginAt(point) => self.routed = Some((pos, self.route(pos, point))),
-            CaptureEvent::Begin => self.routed = None,
+            CaptureEvent::BeginAt(point) => {
+                self.routed = self.route(pos, Some(point)).map(|ids| (pos, ids))
+            }
+            CaptureEvent::Begin => self.routed = self.route(pos, None).map(|ids| (pos, ids)),
             CaptureEvent::Input(_) => {}
         }
         let ids = match &self.routed {
@@ -469,4 +497,79 @@ async fn create(
         }
     }
     Err(CaptureCreationError::NoAvailableBackend)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// two devices sharing the top edge: 1 on x 0..700, 2 on x 700..1400
+    fn shared_top() -> InputCapture {
+        let gate = |from, to| Gate {
+            side: Position::Top,
+            at: 0,
+            from,
+            to,
+        };
+        InputCapture {
+            capture: Box::new(dummy::DummyInputCapture::new()),
+            pressed_keys: HashSet::new(),
+            position_map: HashMap::from([(Position::Top, vec![1, 2])]),
+            id_map: HashMap::from([(1, Position::Top), (2, Position::Top)]),
+            pending: VecDeque::new(),
+            gates: HashMap::from([(1, vec![gate(0, 700)]), (2, vec![gate(700, 1400)])]),
+            routed: None,
+        }
+    }
+
+    /// the dummy backend needs a runtime to be created in
+    fn with_runtime(test: impl FnOnce()) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        let _guard = rt.enter();
+        test();
+    }
+
+    #[test]
+    fn capture_goes_to_the_device_whose_gate_it_is() {
+        with_runtime(capture_goes_to_the_device_whose_gate_it_is_);
+    }
+
+    fn capture_goes_to_the_device_whose_gate_it_is_() {
+        let capture = shared_top();
+        assert_eq!(capture.route(Position::Top, Some((100, 0))), Some(vec![1]));
+        assert_eq!(capture.route(Position::Top, Some((900, 1))), Some(vec![2]));
+    }
+
+    #[test]
+    fn shared_edge_never_goes_to_both_devices() {
+        with_runtime(shared_edge_never_goes_to_both_devices_);
+    }
+
+    fn shared_edge_never_goes_to_both_devices_() {
+        let mut capture = shared_top();
+        // outside both gates: the nearest one only
+        assert_eq!(capture.route(Position::Top, Some((1500, 0))), Some(vec![2]));
+        // no point from the backend: one of them
+        assert_eq!(
+            capture.route(Position::Top, None).map(|ids| ids.len()),
+            Some(1)
+        );
+        // a device without gates yet does not get the other's input
+        capture.gates.remove(&2);
+        assert_eq!(capture.route(Position::Top, Some((100, 0))), Some(vec![1]));
+    }
+
+    #[test]
+    fn edges_without_gates_go_to_everyone_there() {
+        with_runtime(edges_without_gates_go_to_everyone_there_);
+    }
+
+    fn edges_without_gates_go_to_everyone_there_() {
+        let mut capture = shared_top();
+        capture.gates.clear();
+        assert_eq!(capture.route(Position::Top, Some((100, 0))), None);
+    }
 }

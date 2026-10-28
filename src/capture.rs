@@ -488,8 +488,9 @@ impl CaptureTask {
         if let (KeyboardRoute::Client(target), CaptureEvent::Input(e @ Event::Keyboard(_))) =
             (self.keyboard, event)
         {
-            // every capture at a position gets a copy of its events; send once
-            if self.get_type(handle) == CaptureType::Default {
+            // every capture at a position may get a copy of its events; send
+            // once
+            if handle == target {
                 let event = ProtoEvent::Input(self.remap(target, e));
                 if let Err(e) = self.conn.send(event, target).await {
                     const DUR: Duration = Duration::from_millis(500);

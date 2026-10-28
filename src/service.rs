@@ -561,14 +561,16 @@ impl Service {
         self.resolve(handle);
 
         /* deactivate potential other client at this position, unless
-         * placements split the edge between them */
+         * placements split the edge between them, which only capture
+         * backends with gates can do */
         let Some(pos) = self.client_manager.get_pos(handle) else {
             return;
         };
 
         if let Some(other) = self.client_manager.client_at(pos) {
             let placed = |h| self.client_manager.get_placement(h).is_some();
-            if other != handle && !(placed(handle) && placed(other)) {
+            let shared = cfg!(any(windows, target_os = "macos")) && placed(handle) && placed(other);
+            if other != handle && !shared {
                 self.deactivate_client(other);
             }
         }
