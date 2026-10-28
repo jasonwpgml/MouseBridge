@@ -140,6 +140,12 @@ async fn execute(cmd: CliSubcommand) -> Result<(), CliError> {
                         println!(
                             "id {handle}: {host}:{port} ({pos}) active: {active}, ips: {ips:?}"
                         );
+                        for d in state.displays {
+                            println!(
+                                "    display {}x{} at {},{} ({}%)",
+                                d.width, d.height, d.x, d.y, d.scale
+                            );
+                        }
                     }
                     break;
                 }

@@ -185,6 +185,21 @@ pub struct ClientState {
     /// that predates the Hello event. The frontend uses this to
     /// soft-warn on version mismatch.
     pub peer_commit: Option<[u8; 8]>,
+    /// the client's displays, as it reported them
+    #[serde(default)]
+    pub displays: Vec<DisplayInfo>,
+}
+
+/// A display in device-independent units (points on macOS, physical pixels
+/// divided by the scaling on Windows), so sizes compare across devices.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DisplayInfo {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
+    /// scaling in percent
+    pub scale: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

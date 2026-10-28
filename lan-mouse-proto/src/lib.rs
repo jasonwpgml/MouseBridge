@@ -72,6 +72,19 @@ pub enum ProtoEvent {
     /// recognize the event type silently skip it per the
     /// forward-compat handling in the receive loop.
     Hello { commit: [u8; 8] },
+    /// One of the sender's displays, `index` of `count`, sent after
+    /// [`ProtoEvent::Hello`]. The rectangle is in device-independent units
+    /// (points on macOS, physical pixels divided by the scaling on Windows)
+    /// and `scale` is the display's scaling in percent.
+    Display {
+        index: u8,
+        count: u8,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        scale: u16,
+    },
 }
 
 impl Display for ProtoEvent {
@@ -93,6 +106,19 @@ impl Display for ProtoEvent {
                 let s = std::str::from_utf8(commit).unwrap_or("????????");
                 write!(f, "Hello({s})")
             }
+            ProtoEvent::Display {
+                index,
+                count,
+                x,
+                y,
+                width,
+                height,
+                scale,
+            } => write!(
+                f,
+                "Display({}/{count}: {width}x{height}@{x},{y} {scale}%)",
+                index + 1
+            ),
         }
     }
 }
@@ -112,6 +138,7 @@ pub enum EventType {
     Leave,
     Ack,
     Hello,
+    Display,
 }
 
 impl ProtoEvent {
@@ -135,6 +162,7 @@ impl ProtoEvent {
             ProtoEvent::Leave(_) => EventType::Leave,
             ProtoEvent::Ack(_) => EventType::Ack,
             ProtoEvent::Hello { .. } => EventType::Hello,
+            ProtoEvent::Display { .. } => EventType::Display,
         }
     }
 }
@@ -196,6 +224,15 @@ impl TryFrom<[u8; MAX_EVENT_SIZE]> for ProtoEvent {
                 }
                 Ok(Self::Hello { commit })
             }
+            EventType::Display => Ok(Self::Display {
+                index: decode_u8(&mut buf)?,
+                count: decode_u8(&mut buf)?,
+                x: decode_i32(&mut buf)?,
+                y: decode_i32(&mut buf)?,
+                width: decode_i32(&mut buf)?,
+                height: decode_i32(&mut buf)?,
+                scale: decode_u16(&mut buf)?,
+            }),
         }
     }
 }
@@ -265,6 +302,23 @@ impl From<ProtoEvent> for ([u8; MAX_EVENT_SIZE], usize) {
                         encode_u8(buf, len, *b);
                     }
                 }
+                ProtoEvent::Display {
+                    index,
+                    count,
+                    x,
+                    y,
+                    width,
+                    height,
+                    scale,
+                } => {
+                    encode_u8(buf, len, index);
+                    encode_u8(buf, len, count);
+                    encode_i32(buf, len, x);
+                    encode_i32(buf, len, y);
+                    encode_i32(buf, len, width);
+                    encode_i32(buf, len, height);
+                    encode_u16(buf, len, scale);
+                }
             }
         }
         (buf, len)
@@ -284,6 +338,7 @@ macro_rules! decode_impl {
 }
 
 decode_impl!(u8);
+decode_impl!(u16);
 decode_impl!(u32);
 decode_impl!(i32);
 decode_impl!(f64);
@@ -304,6 +359,44 @@ macro_rules! encode_impl {
 }
 
 encode_impl!(u8);
+encode_impl!(u16);
 encode_impl!(u32);
 encode_impl!(i32);
 encode_impl!(f64);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn display_round_trips_within_one_event() {
+        let display = ProtoEvent::Display {
+            index: 1,
+            count: 2,
+            x: 1920,
+            y: -155,
+            width: 1080,
+            height: 1920,
+            scale: 125,
+        };
+        let (buf, len) = display.into();
+        // type byte included, it fills an event exactly
+        assert_eq!(len, MAX_EVENT_SIZE);
+        let ProtoEvent::Display {
+            index,
+            count,
+            x,
+            y,
+            width,
+            height,
+            scale,
+        } = ProtoEvent::try_from(buf).unwrap()
+        else {
+            panic!("not a display");
+        };
+        assert_eq!(
+            (index, count, x, y, width, height, scale),
+            (1, 2, 1920, -155, 1080, 1920, 125)
+        );
+    }
+}

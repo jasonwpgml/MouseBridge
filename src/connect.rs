@@ -1,6 +1,6 @@
 use crate::client::ClientManager;
 use crate::config::local_commit;
-use lan_mouse_ipc::{ClientHandle, DEFAULT_PORT};
+use lan_mouse_ipc::{ClientHandle, DEFAULT_PORT, DisplayInfo};
 use lan_mouse_proto::{MAX_EVENT_SIZE, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
@@ -87,6 +87,26 @@ fn is_lan(addr: &SocketAddr) -> bool {
 /// Connects to whichever address answers first, giving local network
 /// addresses a head start so a slower route like a VPN only wins when the
 /// local one fails.
+/// this device's displays, as events for a peer
+pub(crate) fn display_events() -> Vec<ProtoEvent> {
+    let displays = input_capture::displays();
+    let count = displays.len().min(u8::MAX as usize) as u8;
+    displays
+        .into_iter()
+        .take(count as usize)
+        .enumerate()
+        .map(|(index, d)| ProtoEvent::Display {
+            index: index as u8,
+            count,
+            x: d.x,
+            y: d.y,
+            width: d.width,
+            height: d.height,
+            scale: d.scale,
+        })
+        .collect()
+}
+
 async fn connect_any(
     addrs: &[SocketAddr],
     cert: Certificate,
@@ -244,6 +264,12 @@ async fn connect_to_handle(
         if let Err(e) = conn.send(&buf[..len]).await {
             log::debug!("hello send to {addr} failed: {e}");
         }
+        for event in display_events() {
+            let (buf, len) = event.into();
+            if let Err(e) = conn.send(&buf[..len]).await {
+                log::debug!("display send to {addr} failed: {e}");
+            }
+        }
 
         // poll connection for active
         spawn_local(ping_pong(addr, conn.clone(), ping_response.clone()));
@@ -314,6 +340,24 @@ async fn receive_loop(
                     }
                     ProtoEvent::Hello { commit } => {
                         client_manager.set_peer_commit(handle, Some(commit));
+                    }
+                    ProtoEvent::Display {
+                        index,
+                        count,
+                        x,
+                        y,
+                        width,
+                        height,
+                        scale,
+                    } => {
+                        let display = DisplayInfo {
+                            x,
+                            y,
+                            width,
+                            height,
+                            scale,
+                        };
+                        client_manager.set_display(handle, index, count, display);
                     }
                     event => tx.send((handle, event)).expect("channel closed"),
                 }

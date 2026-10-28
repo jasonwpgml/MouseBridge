@@ -12,8 +12,10 @@ use futures_core::Stream;
 
 use input_event::{Event, KeyboardEvent, scancode};
 
+pub use displays::{DisplayRect, displays};
 pub use error::{CaptureCreationError, CaptureError, InputCaptureError};
 
+mod displays;
 pub mod error;
 
 #[cfg(libei)]

@@ -7,7 +7,7 @@ use std::{
 
 use slab::Slab;
 
-use lan_mouse_ipc::{ClientConfig, ClientHandle, ClientState, Position};
+use lan_mouse_ipc::{ClientConfig, ClientHandle, ClientState, DisplayInfo, Position};
 
 use crate::config::ConfigClient;
 
@@ -295,6 +295,22 @@ impl ClientManager {
     pub(crate) fn set_alive(&self, handle: ClientHandle, alive: bool) {
         if let Some((_, s)) = self.clients.borrow_mut().get_mut(handle as usize) {
             s.alive = alive;
+        }
+    }
+
+    /// stores display `index` of the `count` the client reported
+    pub(crate) fn set_display(
+        &self,
+        handle: ClientHandle,
+        index: u8,
+        count: u8,
+        display: DisplayInfo,
+    ) {
+        if let Some((_, s)) = self.clients.borrow_mut().get_mut(handle as usize) {
+            s.displays.resize(count as usize, DisplayInfo::default());
+            if let Some(slot) = s.displays.get_mut(index as usize) {
+                *slot = display;
+            }
         }
     }
 

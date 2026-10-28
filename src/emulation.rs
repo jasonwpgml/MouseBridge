@@ -1,8 +1,10 @@
 use crate::config::local_commit;
+use crate::connect::display_events;
 use crate::listen::{LanMouseListener, ListenEvent, ListenerCreationError};
 use futures::StreamExt;
 use input_emulation::{Edge, EmulationHandle, InputEmulation, InputEmulationError};
 use input_event::Event;
+use lan_mouse_ipc::DisplayInfo;
 use lan_mouse_proto::{Position, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
@@ -69,6 +71,13 @@ pub(crate) enum EmulationEvent {
     PeerHello {
         addr: SocketAddr,
         commit: [u8; 8],
+    },
+    /// display `index` of the `count` a peer reported
+    PeerDisplay {
+        addr: SocketAddr,
+        index: u8,
+        count: u8,
+        display: DisplayInfo,
     },
 }
 
@@ -193,7 +202,14 @@ impl ListenTask {
                             // the peer is in fact happily talking to us.
                             ProtoEvent::Hello { commit } => {
                                 self.listener.reply(addr, ProtoEvent::Hello { commit: local_commit() }).await;
+                                for event in display_events() {
+                                    self.listener.reply(addr, event).await;
+                                }
                                 self.event_tx.send(EmulationEvent::PeerHello { addr, commit }).expect("channel closed");
+                            }
+                            ProtoEvent::Display { index, count, x, y, width, height, scale } => {
+                                let display = DisplayInfo { x, y, width, height, scale };
+                                self.event_tx.send(EmulationEvent::PeerDisplay { addr, index, count, display }).expect("channel closed");
                             }
                             _ => {}
                         }
