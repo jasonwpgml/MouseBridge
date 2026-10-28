@@ -10,7 +10,7 @@ use input_capture::{
     CaptureError, CaptureEvent, CaptureHandle, Gate, InputCapture, InputCaptureError,
     KeyboardCapture, Position,
 };
-use input_event::{Event, KeyboardEvent, scancode};
+use input_event::{Event, KeyboardEvent, PointerEvent, scancode};
 use lan_mouse_proto::ProtoEvent;
 use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
@@ -77,6 +77,10 @@ enum CaptureRequest {
     /// let the pointer reach a client only through these passages, or
     /// anywhere along its edge with `None`
     SetPassages(CaptureHandle, Option<Vec<Passage>>),
+    /// a mouse button was pressed on this device
+    LocalClick,
+    /// a mouse button was pressed on this client
+    ClientClicked(CaptureHandle),
 }
 
 /// A portal to a client and the gate it is in this device's pointer
@@ -100,6 +104,8 @@ pub(crate) enum KeyboardRoute {
     Local,
     /// always to this client
     Client(CaptureHandle),
+    /// to the device last clicked on: this one with `None`
+    LastClicked(Option<CaptureHandle>),
 }
 
 impl Capture {
@@ -191,6 +197,14 @@ impl Capture {
         let _ = self.request_tx.send(CaptureRequest::SetKeyboard(route));
     }
 
+    pub(crate) fn local_click(&self) {
+        let _ = self.request_tx.send(CaptureRequest::LocalClick);
+    }
+
+    pub(crate) fn client_clicked(&self, handle: CaptureHandle) {
+        let _ = self.request_tx.send(CaptureRequest::ClientClicked(handle));
+    }
+
     pub(crate) fn set_passages(&self, handle: CaptureHandle, passages: Option<Vec<Passage>>) {
         let _ = self
             .request_tx
@@ -245,7 +259,16 @@ impl CaptureTask {
     }
 
     fn set_keyboard(&mut self, route: KeyboardRoute) {
-        self.keyboard = route;
+        // asking for keys to follow clicks again keeps the last click
+        if !matches!(
+            (self.keyboard, route),
+            (
+                KeyboardRoute::LastClicked(_),
+                KeyboardRoute::LastClicked(None)
+            )
+        ) {
+            self.keyboard = route;
+        }
         self.apply_keyboard();
     }
 
@@ -262,8 +285,44 @@ impl CaptureTask {
                 .map_or(KeyboardCapture::FollowPointer, |&(_, pos, _)| {
                     KeyboardCapture::Always(pos)
                 }),
+            KeyboardRoute::LastClicked(None) => KeyboardCapture::Local,
+            KeyboardRoute::LastClicked(Some(target)) => self
+                .captures
+                .iter()
+                .find(|&&(h, ..)| h == target)
+                .map_or(KeyboardCapture::Local, |&(_, pos, _)| {
+                    KeyboardCapture::Always(pos)
+                }),
         };
         input_capture::set_keyboard_capture(capture);
+    }
+
+    /// keys follow a click to the device it was on, this one with `None`
+    fn clicked(&mut self, at: Option<CaptureHandle>) {
+        if let KeyboardRoute::LastClicked(last) = self.keyboard {
+            if last != at {
+                log::info!("keyboard follows the click to {at:?}");
+                self.keyboard = KeyboardRoute::LastClicked(at);
+                self.apply_keyboard();
+            }
+        }
+    }
+
+    /// tells the clients this device was clicked, for those whose keys
+    /// follow clicks
+    async fn local_click(&mut self) {
+        self.clicked(None);
+        let clients = self
+            .captures
+            .iter()
+            .filter(|&&(_, _, t)| t == CaptureType::Default)
+            .map(|&(h, ..)| h)
+            .collect::<Vec<_>>();
+        for handle in clients {
+            if let Err(e) = self.conn.send(ProtoEvent::Clicked, handle).await {
+                log::debug!("click notification to client {handle} failed: {e}");
+            }
+        }
     }
 
     fn set_passages(&mut self, handle: CaptureHandle, passages: Option<Vec<Passage>>) {
@@ -346,6 +405,8 @@ impl CaptureTask {
                         CaptureRequest::SetKeyRemap(h, r) => self.set_key_remap(h, r),
                         CaptureRequest::SetKeyboard(route) => self.set_keyboard(route),
                         CaptureRequest::SetPassages(h, p) => self.set_passages(h, p),
+                        CaptureRequest::LocalClick => self.local_click().await,
+                        CaptureRequest::ClientClicked(h) => self.clicked(Some(h)),
                     },
                     _ = self.cancellation_token.cancelled() => return,
                 }
@@ -464,6 +525,8 @@ impl CaptureTask {
                         self.set_passages(h, p);
                         capture.set_gates(h, self.gates(h));
                     }
+                    CaptureRequest::LocalClick => self.local_click().await,
+                    CaptureRequest::ClientClicked(h) => self.clicked(Some(h)),
                 },
                 _ = self.cancellation_token.cancelled() => break,
             }
@@ -484,10 +547,21 @@ impl CaptureTask {
             return self.release_capture(capture).await;
         }
 
+        // a click on a client takes the keys there
+        if let CaptureEvent::Input(Event::Pointer(PointerEvent::Button { state: 1, .. })) = event {
+            if self.get_type(handle) == CaptureType::Default {
+                self.clicked(Some(handle));
+            }
+        }
+
         // keys locked to one client go there, wherever the pointer is
-        if let (KeyboardRoute::Client(target), CaptureEvent::Input(e @ Event::Keyboard(_))) =
-            (self.keyboard, event)
-        {
+        let locked = match self.keyboard {
+            KeyboardRoute::Client(target) | KeyboardRoute::LastClicked(Some(target)) => {
+                Some(target)
+            }
+            _ => None,
+        };
+        if let (Some(target), CaptureEvent::Input(e @ Event::Keyboard(_))) = (locked, event) {
             // every capture at a position may get a copy of its events; send
             // once
             if handle == target {

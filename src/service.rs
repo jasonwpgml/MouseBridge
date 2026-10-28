@@ -71,6 +71,8 @@ pub struct Service {
     next_trigger_handle: u64,
     /// where this device's keyboard input goes
     keyboard_mode: KeyboardMode,
+    /// mouse buttons pressed on this device
+    local_clicks: tokio::sync::mpsc::UnboundedReceiver<()>,
 }
 
 #[derive(Debug)]
@@ -116,6 +118,10 @@ impl Service {
 
         let port = config.port();
         let keyboard_mode = config.keyboard_mode();
+        let (click_tx, local_clicks) = tokio::sync::mpsc::unbounded_channel();
+        input_capture::set_local_click_handler(move || {
+            let _ = click_tx.send(());
+        });
         let service = Self {
             config,
             capture,
@@ -134,6 +140,7 @@ impl Service {
             incoming_conns: Default::default(),
             next_trigger_handle: 0,
             keyboard_mode,
+            local_clicks,
         };
         Ok(service)
     }
@@ -160,6 +167,7 @@ impl Service {
                 event = self.capture.event() => self.handle_capture_event(event),
                 event = self.resolver.event() => self.handle_resolver_event(event),
                 _ = self.config.changed() => self.handle_config_change(),
+                Some(()) = self.local_clicks.recv() => self.capture.local_click(),
                 r = signal::ctrl_c() => break r.expect("failed to wait for CTRL+C"),
             }
         }
@@ -348,6 +356,11 @@ impl Service {
                     .any(|incoming| incoming.addr == addr && incoming.pos == pos);
                 if towards_device {
                     self.emulation.send_leave_event(addr);
+                }
+            }
+            EmulationEvent::PeerClicked { addr } => {
+                if let Some(handle) = self.client_manager.get_client(addr) {
+                    self.capture.client_clicked(handle);
                 }
             }
             EmulationEvent::Connected { addr, fingerprint } => {
@@ -637,6 +650,7 @@ impl Service {
         let route = match &self.keyboard_mode {
             KeyboardMode::FollowPointer => KeyboardRoute::FollowPointer,
             KeyboardMode::Local => KeyboardRoute::Local,
+            KeyboardMode::LastClicked => KeyboardRoute::LastClicked(None),
             KeyboardMode::Device(hostname) => {
                 let client = self
                     .client_manager

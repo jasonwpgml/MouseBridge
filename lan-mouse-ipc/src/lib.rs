@@ -331,6 +331,8 @@ pub enum KeyboardMode {
     Local,
     /// always the client with this hostname, even while the pointer is here
     Device(String),
+    /// the device last clicked on, with any mouse
+    LastClicked,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]

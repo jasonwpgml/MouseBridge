@@ -28,6 +28,10 @@ pub(crate) struct Emulation {
 }
 
 pub(crate) enum EmulationEvent {
+    /// a mouse button was pressed on the device at this address
+    PeerClicked {
+        addr: SocketAddr,
+    },
     Connected {
         addr: SocketAddr,
         fingerprint: String,
@@ -184,6 +188,7 @@ impl ListenTask {
                                 }
                             }
                             ProtoEvent::EnterAt { x, y } => self.emulation_proxy.enter_at(addr, (x, y)),
+                            ProtoEvent::Clicked => self.event_tx.send(EmulationEvent::PeerClicked { addr }).expect("channel closed"),
                             ProtoEvent::Leave(_) => {
                                 self.emulation_proxy.remove(addr);
                                 self.listener.reply(addr, ProtoEvent::Ack(0)).await;

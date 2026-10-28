@@ -83,6 +83,25 @@ fn keyboard_capture() -> KeyboardCapture {
     *KEYBOARD_CAPTURE.read().expect("lock")
 }
 
+type ClickHandler = Box<dyn Fn() + Send + Sync>;
+
+static LOCAL_CLICK: RwLock<Option<ClickHandler>> = RwLock::new(None);
+
+/// Calls `handler` whenever a mouse button is pressed on this device while
+/// input is not captured, with its own mouse or a pointer another device
+/// moves here. It must not block: the Windows and macOS backends, the only
+/// ones calling it, hold up all input meanwhile.
+pub fn set_local_click_handler(handler: impl Fn() + Send + Sync + 'static) {
+    *LOCAL_CLICK.write().expect("lock") = Some(Box::new(handler));
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn local_click() {
+    if let Some(handler) = LOCAL_CLICK.read().expect("lock").as_ref() {
+        handler();
+    }
+}
+
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub enum Position {
     Left,

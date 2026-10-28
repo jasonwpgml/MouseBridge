@@ -76,7 +76,8 @@ enum CliSubcommand {
     /// save configuration to file
     SaveConfig,
     /// choose where this device's keyboard input goes:
-    /// `follow` (with the pointer), `local` (this device) or a client's hostname
+    /// `follow` (with the pointer), `local` (this device), `click` (the
+    /// device last clicked on) or a client's hostname
     Keyboard { mode: String },
 }
 
@@ -185,6 +186,7 @@ async fn execute(cmd: CliSubcommand) -> Result<(), CliError> {
             let mode = match mode.as_str() {
                 "follow" => KeyboardMode::FollowPointer,
                 "local" => KeyboardMode::Local,
+                "click" => KeyboardMode::LastClicked,
                 _ => KeyboardMode::Device(mode),
             };
             tx.request(FrontendRequest::SetKeyboardMode(mode)).await?

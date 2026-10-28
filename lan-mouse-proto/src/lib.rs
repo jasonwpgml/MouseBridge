@@ -89,6 +89,9 @@ pub enum ProtoEvent {
     /// in the receiver's device-independent display coordinates (see
     /// [`ProtoEvent::Display`]).
     EnterAt { x: i32, y: i32 },
+    /// A mouse button was pressed on the sender while it was not sending
+    /// input anywhere, so it now has the window in use.
+    Clicked,
 }
 
 impl Display for ProtoEvent {
@@ -124,6 +127,7 @@ impl Display for ProtoEvent {
                 index + 1
             ),
             ProtoEvent::EnterAt { x, y } => write!(f, "EnterAt({x},{y})"),
+            ProtoEvent::Clicked => write!(f, "Clicked"),
         }
     }
 }
@@ -145,6 +149,7 @@ pub enum EventType {
     Hello,
     Display,
     EnterAt,
+    Clicked,
 }
 
 impl ProtoEvent {
@@ -170,6 +175,7 @@ impl ProtoEvent {
             ProtoEvent::Hello { .. } => EventType::Hello,
             ProtoEvent::Display { .. } => EventType::Display,
             ProtoEvent::EnterAt { .. } => EventType::EnterAt,
+            ProtoEvent::Clicked => EventType::Clicked,
         }
     }
 }
@@ -244,6 +250,7 @@ impl TryFrom<[u8; MAX_EVENT_SIZE]> for ProtoEvent {
                 x: decode_i32(&mut buf)?,
                 y: decode_i32(&mut buf)?,
             }),
+            EventType::Clicked => Ok(Self::Clicked),
         }
     }
 }
@@ -334,6 +341,7 @@ impl From<ProtoEvent> for ([u8; MAX_EVENT_SIZE], usize) {
                     encode_i32(buf, len, x);
                     encode_i32(buf, len, y);
                 }
+                ProtoEvent::Clicked => {}
             }
         }
         (buf, len)
@@ -422,5 +430,12 @@ mod tests {
             panic!("not an entry point");
         };
         assert_eq!((x, y), (-300, 1079));
+    }
+
+    #[test]
+    fn click_round_trips() {
+        let (buf, len) = ProtoEvent::Clicked.into();
+        assert_eq!(len, 1);
+        assert!(matches!(ProtoEvent::try_from(buf), Ok(ProtoEvent::Clicked)));
     }
 }

@@ -32,7 +32,7 @@ use input_event::{
 };
 
 use super::{CaptureEvent, Position, display_util};
-use crate::{Gate, passes};
+use crate::{Gate, local_click, passes};
 use crate::{KeyboardCapture, keyboard_capture};
 
 pub(crate) struct EventThread {
@@ -324,6 +324,12 @@ unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM)
 
     /* no client was active */
     if !active {
+        if [WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_MBUTTONDOWN]
+            .iter()
+            .any(|&m| wparam.0 == m as usize)
+        {
+            local_click();
+        }
         return CallNextHookEx(None, ncode, wparam, lparam);
     }
 

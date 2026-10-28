@@ -45,6 +45,7 @@ pub fn local_commit() -> [u8; 8] {
 const CONFIG_FILE_NAME: &str = "config.toml";
 const KEYBOARD_FOLLOW: &str = "follow";
 const KEYBOARD_LOCAL: &str = "local";
+const KEYBOARD_CLICK: &str = "click";
 const CERT_FILE_NAME: &str = "mousebridge.pem";
 const CONFIG_DIR_NAME: &str = "mousebridge";
 /// where Lan Mouse, which MouseBridge is based on, keeps its files
@@ -65,6 +66,7 @@ fn parse_keyboard_mode(value: Option<&str>) -> KeyboardMode {
     match value {
         None | Some(KEYBOARD_FOLLOW) => KeyboardMode::FollowPointer,
         Some(KEYBOARD_LOCAL) => KeyboardMode::Local,
+        Some(KEYBOARD_CLICK) => KeyboardMode::LastClicked,
         Some(hostname) => KeyboardMode::Device(hostname.to_owned()),
     }
 }
@@ -73,6 +75,7 @@ fn keyboard_mode_value(mode: &KeyboardMode) -> Option<String> {
     match mode {
         KeyboardMode::FollowPointer => None,
         KeyboardMode::Local => Some(KEYBOARD_LOCAL.to_owned()),
+        KeyboardMode::LastClicked => Some(KEYBOARD_CLICK.to_owned()),
         KeyboardMode::Device(hostname) => Some(hostname.clone()),
     }
 }
@@ -105,7 +108,8 @@ struct ConfigToml {
     cert_path: Option<PathBuf>,
     /// show remote pointers as cursors of their own (Windows only)
     second_cursor: Option<bool>,
-    /// where keyboard input goes: "follow" (default), "local" or a hostname
+    /// where keyboard input goes: "follow" (default), "local", "click" or a
+    /// hostname
     keyboard: Option<String>,
     /// where this device sits on the canvas the devices are arranged on
     placement: Option<Placement>,
@@ -761,6 +765,7 @@ placement = { x = 0, y = 0, size = 80 }
         );
         for mode in [
             KeyboardMode::Local,
+            KeyboardMode::LastClicked,
             KeyboardMode::Device("DESKTOP-SN73G0N".into()),
             KeyboardMode::FollowPointer,
         ] {

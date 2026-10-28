@@ -1,5 +1,5 @@
 use super::{Capture, CaptureError, CaptureEvent, Position, error::MacosCaptureCreationError};
-use crate::{Gate, KeyboardCapture, keyboard_capture, passes};
+use crate::{Gate, KeyboardCapture, keyboard_capture, local_click, passes};
 use async_trait::async_trait;
 use bitflags::bitflags;
 use core_foundation::{
@@ -599,6 +599,11 @@ fn create_event_tap<'a>(
             ) {
                 state.reset_cursor().unwrap_or_else(|e| log::warn!("{e}"));
             }
+        } else if matches!(
+            event_type,
+            CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown
+        ) {
+            local_click();
         } else if matches!(event_type, CGEventType::MouseMoved) {
             // Did we cross a barrier?
             if let Some((new_pos, display)) = state.crossed(cg_ev) {
