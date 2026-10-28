@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::ffi::c_void;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
@@ -12,28 +14,51 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_TOPMOST,
-    MSG, PostMessageW, PostQuitMessage, RegisterClassW, SW_HIDE, SWP_ASYNCWINDOWPOS,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_SHOWWINDOW, SetWindowPos, ShowWindowAsync, TranslateMessage,
-    ULW_ALPHA, UpdateLayeredWindow, WM_CLOSE, WM_DESTROY, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    MSG, PostMessageW, PostQuitMessage, RegisterClassW, SW_HIDE, SWP_NOACTIVATE, SWP_NOSIZE,
+    SWP_SHOWWINDOW, SetWindowPos, ShowWindow, TranslateMessage, ULW_ALPHA, UpdateLayeredWindow,
+    WM_APP, WM_CLOSE, WM_DESTROY, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
 use crate::cursor_image::{self, TIP, TextMask};
+
+/// moves the window to the latest position in [`Target`]
+const WM_MOVE_TO_TARGET: u32 = WM_APP;
+const WM_HIDE: u32 = WM_APP + 1;
+
+/// Where the window should go. Pointer motion arrives faster than windows
+/// can be moved, so only the latest position is kept and at most one move
+/// is queued: queuing every move made the cursor trail far behind.
+#[derive(Default)]
+struct Target {
+    /// x in the upper, y in the lower 32 bits
+    position: AtomicU64,
+    queued: AtomicBool,
+}
+
+thread_local! {
+    /// target of the overlay owned by this thread
+    static TARGET: RefCell<Option<Arc<Target>>> = const { RefCell::new(None) };
+}
 
 /// A click-through, always-on-top window showing a second cursor with a
 /// name tag. It runs its own message loop on a separate thread.
 pub(super) struct Overlay {
     /// raw HWND, which is not Send itself
     hwnd: isize,
+    target: Arc<Target>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Overlay {
     pub(super) fn new(label: &str, color: (u8, u8, u8)) -> Option<Self> {
         let label: Vec<u16> = label.encode_utf16().collect();
+        let target = Arc::new(Target::default());
+        let thread_target = target.clone();
         let (tx, rx) = mpsc::channel();
         let thread = thread::spawn(move || {
+            TARGET.set(Some(thread_target));
             let hwnd = match unsafe { create_window(&label, color) } {
                 Ok(hwnd) => hwnd,
                 Err(e) => {
@@ -54,6 +79,7 @@ impl Overlay {
         let hwnd = rx.recv().ok().flatten()?;
         Some(Self {
             hwnd,
+            target,
             thread: Some(thread),
         })
     }
@@ -64,23 +90,20 @@ impl Overlay {
 
     /// shows the overlay with the arrow's tip at the given screen position
     pub(super) fn move_to(&self, (x, y): (i32, i32)) {
-        let flags = SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS | SWP_SHOWWINDOW;
-        unsafe {
-            let _ = SetWindowPos(
-                self.hwnd(),
-                Some(HWND_TOPMOST),
-                x - TIP.0,
-                y - TIP.1,
-                0,
-                0,
-                flags,
-            );
+        let position = ((x as u32 as u64) << 32) | y as u32 as u64;
+        self.target.position.store(position, Ordering::Release);
+        if !self.target.queued.swap(true, Ordering::AcqRel) {
+            self.post(WM_MOVE_TO_TARGET);
         }
     }
 
     pub(super) fn hide(&self) {
+        self.post(WM_HIDE);
+    }
+
+    fn post(&self, msg: u32) {
         unsafe {
-            let _ = ShowWindowAsync(self.hwnd(), SW_HIDE);
+            let _ = PostMessageW(Some(self.hwnd()), msg, WPARAM(0), LPARAM(0));
         }
     }
 }
@@ -135,6 +158,27 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
+        WM_MOVE_TO_TARGET => {
+            let position = TARGET.with_borrow(|target| {
+                let target = target.as_ref()?;
+                // a move requested from here on needs a new message
+                target.queued.store(false, Ordering::Release);
+                Some(target.position.load(Ordering::Acquire))
+            });
+            if let Some(position) = position {
+                let (x, y) = ((position >> 32) as u32 as i32, position as u32 as i32);
+                let flags = SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW;
+                unsafe {
+                    let _ =
+                        SetWindowPos(hwnd, Some(HWND_TOPMOST), x - TIP.0, y - TIP.1, 0, 0, flags);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_HIDE => {
+            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+            LRESULT(0)
+        }
         WM_CLOSE => {
             let _ = unsafe { DestroyWindow(hwnd) };
             LRESULT(0)
