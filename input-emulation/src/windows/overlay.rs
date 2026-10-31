@@ -3,6 +3,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
+use std::time::Instant;
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -12,20 +13,33 @@ use windows::Win32::Graphics::Gdi::{
     SelectObject, SetBkColor, SetTextColor, TextOutW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow, SetThreadDpiAwarenessContext,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_TOPMOST,
-    MSG, PostMessageW, PostQuitMessage, RegisterClassW, SW_HIDE, SWP_NOACTIVATE, SWP_NOSIZE,
-    SWP_SHOWWINDOW, SetWindowPos, ShowWindow, TranslateMessage, ULW_ALPHA, UpdateLayeredWindow,
-    WM_APP, WM_CLOSE, WM_DESTROY, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    KillTimer, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SW_HIDE, SWP_NOACTIVATE,
+    SWP_NOSIZE, SWP_SHOWWINDOW, SetTimer, SetWindowPos, ShowWindow, TranslateMessage, ULW_ALPHA,
+    UpdateLayeredWindow, WM_APP, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_TIMER, WNDCLASSW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
-use crate::cursor_image::{self, TIP, TextMask};
+use crate::cursor_image::{self, Picture, TextMask};
 
 /// moves the window to the latest position in [`Target`]
 const WM_MOVE_TO_TARGET: u32 = WM_APP;
 const WM_HIDE: u32 = WM_APP + 1;
+/// shows the name again, which then fades out
+const WM_SHOW_LABEL: u32 = WM_APP + 2;
+
+const FADE_TIMER: usize = 1;
+const FADE_FRAME_MS: u32 = 30;
+/// text is drawn this many times larger and shrunk, which comes out smoother
+/// than GDI's own antialiasing at small sizes
+const TEXT_OVERSAMPLING: usize = 4;
+/// height of the name at 96 dpi
+const TEXT_SIZE: f32 = 13.0;
 
 /// Where the window should go. Pointer motion arrives faster than windows
 /// can be moved, so only the latest position is kept and at most one move
@@ -40,6 +54,49 @@ struct Target {
 thread_local! {
     /// target of the overlay owned by this thread
     static TARGET: RefCell<Option<Arc<Target>>> = const { RefCell::new(None) };
+    /// what the overlay owned by this thread shows
+    static FACE: RefCell<Option<Face>> = const { RefCell::new(None) };
+}
+
+struct Face {
+    label: Vec<u16>,
+    color: (u8, u8, u8),
+    picture: Picture,
+    /// when the name last came up, `None` while nothing was shown yet
+    label_since: Option<Instant>,
+}
+
+impl Face {
+    fn label_opacity(&self) -> f32 {
+        self.label_since
+            .map_or(1.0, |since| cursor_image::label_opacity(since.elapsed()))
+    }
+}
+
+/// draws the current frame; never holds [`FACE`] while calling into the
+/// window system, which can call back into [`window_proc`]
+unsafe fn redraw(hwnd: HWND) {
+    let frame = FACE.with_borrow(|face| {
+        let face = face.as_ref()?;
+        Some(face.picture.frame(face.label_opacity()))
+    });
+    if let Some(frame) = frame {
+        if let Err(e) = unsafe { show_image(hwnd, &frame) } {
+            log::warn!("could not draw second cursor: {e}");
+        }
+    }
+}
+
+unsafe fn show_label(hwnd: HWND) {
+    FACE.with_borrow_mut(|face| {
+        if let Some(face) = face {
+            face.label_since = Some(Instant::now());
+        }
+    });
+    unsafe {
+        redraw(hwnd);
+        SetTimer(Some(hwnd), FADE_TIMER, FADE_FRAME_MS, None);
+    }
 }
 
 /// A click-through, always-on-top window showing a second cursor with a
@@ -59,6 +116,8 @@ impl Overlay {
         let (tx, rx) = mpsc::channel();
         let thread = thread::spawn(move || {
             TARGET.set(Some(thread_target));
+            // draws at the display's real resolution instead of being stretched
+            unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
             let hwnd = match unsafe { create_window(&label, color) } {
                 Ok(hwnd) => hwnd,
                 Err(e) => {
@@ -99,6 +158,11 @@ impl Overlay {
 
     pub(super) fn hide(&self) {
         self.post(WM_HIDE);
+    }
+
+    /// shows the name for a moment, for when the pointer comes in
+    pub(super) fn show_label(&self) {
+        self.post(WM_SHOW_LABEL);
     }
 
     fn post(&self, msg: u32) {
@@ -146,8 +210,15 @@ unsafe fn create_window(label: &[u16], color: (u8, u8, u8)) -> windows::core::Re
             None,
         )?
     };
-    let image = cursor_image::render(color, &unsafe { text_mask(label) });
-    unsafe { show_image(hwnd, &image)? };
+    let scale = unsafe { GetDpiForWindow(hwnd) } as f32 / 96.0;
+    let picture = cursor_image::render(color, &unsafe { text_mask(label, scale) }, scale);
+    FACE.set(Some(Face {
+        label: label.to_vec(),
+        color,
+        picture,
+        label_since: None,
+    }));
+    unsafe { redraw(hwnd) };
     Ok(hwnd)
 }
 
@@ -165,18 +236,51 @@ unsafe extern "system" fn window_proc(
                 target.queued.store(false, Ordering::Release);
                 Some(target.position.load(Ordering::Acquire))
             });
-            if let Some(position) = position {
+            let tip = FACE.with_borrow(|face| face.as_ref().map(|f| f.picture.tip));
+            if let (Some(position), Some(tip)) = (position, tip) {
                 let (x, y) = ((position >> 32) as u32 as i32, position as u32 as i32);
                 let flags = SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW;
                 unsafe {
                     let _ =
-                        SetWindowPos(hwnd, Some(HWND_TOPMOST), x - TIP.0, y - TIP.1, 0, 0, flags);
+                        SetWindowPos(hwnd, Some(HWND_TOPMOST), x - tip.0, y - tip.1, 0, 0, flags);
                 }
+            }
+            // the first time it appears the name comes up by itself
+            if FACE.with_borrow(|face| face.as_ref().is_some_and(|f| f.label_since.is_none())) {
+                unsafe { show_label(hwnd) };
             }
             LRESULT(0)
         }
         WM_HIDE => {
             let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+            LRESULT(0)
+        }
+        WM_SHOW_LABEL => {
+            unsafe { show_label(hwnd) };
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == FADE_TIMER => {
+            unsafe { redraw(hwnd) };
+            if FACE.with_borrow(|face| face.as_ref().is_none_or(|f| f.label_opacity() == 0.0)) {
+                let _ = unsafe { KillTimer(Some(hwnd), FADE_TIMER) };
+            }
+            LRESULT(0)
+        }
+        WM_DPICHANGED => {
+            // moved to a display with another scale; the window takes the
+            // new picture's size when it is drawn
+            let scale = (wparam.0 & 0xffff) as f32 / 96.0;
+            let source = FACE.with_borrow(|face| face.as_ref().map(|f| (f.label.clone(), f.color)));
+            if let Some((label, color)) = source {
+                let picture =
+                    cursor_image::render(color, &unsafe { text_mask(&label, scale) }, scale);
+                FACE.with_borrow_mut(|face| {
+                    if let Some(face) = face {
+                        face.picture = picture;
+                    }
+                });
+                unsafe { redraw(hwnd) };
+            }
             LRESULT(0)
         }
         WM_CLOSE => {
@@ -246,10 +350,11 @@ impl Drop for Canvas {
 }
 
 /// renders the label with GDI, white on black, and keeps the brightness
-unsafe fn text_mask(label: &[u16]) -> TextMask {
+unsafe fn text_mask(label: &[u16], scale: f32) -> TextMask {
+    let height = (TEXT_SIZE * scale).round() as i32 * TEXT_OVERSAMPLING as i32;
     let font = unsafe {
         CreateFontW(
-            -12,
+            -height,
             0,
             0,
             0,
@@ -273,16 +378,36 @@ unsafe fn text_mask(label: &[u16]) -> TextMask {
         SelectObject(measure, old);
         let _ = DeleteDC(measure);
     }
-    let (width, height) = (size.cx.max(1) as usize, size.cy.max(1) as usize);
-    let coverage = match unsafe { Canvas::new(width, height) } {
-        Ok(mut canvas) => unsafe {
-            let old = SelectObject(canvas.dc, HGDIOBJ(font.0));
-            SetTextColor(canvas.dc, COLORREF(0x00ff_ffff));
-            SetBkColor(canvas.dc, COLORREF(0));
-            let _ = TextOutW(canvas.dc, 0, 0, label);
-            SelectObject(canvas.dc, old);
-            canvas.pixels().iter().map(|p| p[1]).collect()
-        },
+    let n = TEXT_OVERSAMPLING;
+    let (width, height) = (
+        (size.cx.max(1) as usize).div_ceil(n),
+        (size.cy.max(1) as usize).div_ceil(n),
+    );
+    let coverage = match unsafe { Canvas::new(width * n, height * n) } {
+        Ok(mut canvas) => {
+            unsafe {
+                let old = SelectObject(canvas.dc, HGDIOBJ(font.0));
+                SetTextColor(canvas.dc, COLORREF(0x00ff_ffff));
+                SetBkColor(canvas.dc, COLORREF(0));
+                let _ = TextOutW(canvas.dc, 0, 0, label);
+                SelectObject(canvas.dc, old);
+            }
+            let large = canvas.pixels();
+            let mut coverage = Vec::with_capacity(width * height);
+            for y in 0..height {
+                for x in 0..width {
+                    let mut sum = 0usize;
+                    for row in large[y * n * width * n..].chunks(width * n).take(n) {
+                        sum += row[x * n..x * n + n]
+                            .iter()
+                            .map(|p| p[1] as usize)
+                            .sum::<usize>();
+                    }
+                    coverage.push((sum / (n * n)) as u8);
+                }
+            }
+            coverage
+        }
         Err(e) => {
             log::warn!("could not render second cursor label: {e}");
             vec![0; width * height]

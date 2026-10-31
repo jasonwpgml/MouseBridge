@@ -138,6 +138,7 @@ impl Emulation for WindowsEmulation {
                 cursor.pointer = Pointer::new(at);
                 if let Some(overlay) = &cursor.overlay {
                     overlay.move_to(at);
+                    overlay.show_label();
                 }
             }
             None => set_cursor_position(at),
