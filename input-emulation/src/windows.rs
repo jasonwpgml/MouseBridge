@@ -50,6 +50,10 @@ const DEFAULT_REPEAT_INTERVAL: Duration = Duration::from_millis(32);
 pub(crate) struct WindowsEmulation {
     repeat_task: Option<AbortHandle>,
     second_cursors: HashMap<EmulationHandle, SecondCursor>,
+    /// fraction of a pixel not moved yet, as small motions must add up
+    motion_remainder: (f64, f64),
+    /// trackpad scrolling not sent yet, per axis
+    pending_scroll: [i32; 2],
     /// where the last second cursor was, to continue from there
     last_position: Option<(i32, i32)>,
 }
@@ -59,6 +63,8 @@ impl WindowsEmulation {
         Ok(Self {
             repeat_task: None,
             second_cursors: HashMap::new(),
+            motion_remainder: (0.0, 0.0),
+            pending_scroll: [0; 2],
             last_position: None,
         })
     }
@@ -71,6 +77,18 @@ impl Emulation for WindowsEmulation {
         event: Event,
         handle: EmulationHandle,
     ) -> Result<(), EmulationError> {
+        let event = match event {
+            Event::Pointer(PointerEvent::Axis { axis, value, .. }) => {
+                let Some(pending) = self.pending_scroll.get_mut(axis as usize) else {
+                    return Ok(());
+                };
+                let Some(value) = wheel_steps(value, pending) else {
+                    return Ok(());
+                };
+                Event::Pointer(PointerEvent::AxisDiscrete120 { axis, value })
+            }
+            event => event,
+        };
         if let Event::Pointer(pointer_event) = event {
             if let Some(cursor) = self.second_cursors.get_mut(&handle) {
                 cursor.consume(pointer_event);
@@ -80,7 +98,9 @@ impl Emulation for WindowsEmulation {
         match event {
             Event::Pointer(pointer_event) => match pointer_event {
                 PointerEvent::Motion { time: _, dx, dy } => {
-                    rel_mouse(dx as i32, dy as i32);
+                    let dx = whole_pixels(dx, &mut self.motion_remainder.0);
+                    let dy = whole_pixels(dy, &mut self.motion_remainder.1);
+                    rel_mouse(dx, dy);
                 }
                 PointerEvent::Button {
                     time: _,
@@ -426,6 +446,14 @@ fn send_keyboard_input(ki: KEYBDINPUT) {
         Anonymous: INPUT_0 { ki },
     });
 }
+/// the whole pixels of a motion, keeping the rest for the next one
+fn whole_pixels(delta: f64, remainder: &mut f64) -> i32 {
+    let total = delta + *remainder;
+    let whole = total.trunc();
+    *remainder = total - whole;
+    whole as i32
+}
+
 fn rel_mouse(dx: i32, dy: i32) {
     let mi = MOUSEINPUT {
         dx,
@@ -483,6 +511,26 @@ fn scroll(axis: u8, value: i32) {
     if let Some(mi) = scroll_input(axis, value) {
         send_mouse_input(mi);
     }
+}
+
+/// Turns a trackpad's scroll in points into wheel units, sent once there is
+/// enough of it. A trackpad reports a few points at a time, which many
+/// windows ignore as too small a fraction of a wheel notch of 120.
+fn wheel_steps(points: f64, pending: &mut i32) -> Option<i32> {
+    // a browser scrolls about 100 points per notch
+    const UNITS_PER_POINT: f64 = 1.2;
+    // a third of a notch, which is one line
+    const SMALLEST_STEP: i32 = 40;
+    let units = (points * UNITS_PER_POINT).round() as i32;
+    // the fingers turned around, what was left belongs to the old direction
+    if units.signum() == -pending.signum() {
+        *pending = 0;
+    }
+    *pending += units;
+    if pending.abs() < SMALLEST_STEP {
+        return None;
+    }
+    Some(std::mem::take(pending))
 }
 
 /// sends a scroll to the window at a point without moving the system cursor,
@@ -616,7 +664,39 @@ fn linux_keycode_to_windows_scancode(linux_keycode: u32) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
-    use super::{wheel_lparam, wheel_wparam};
+    use super::{wheel_lparam, wheel_steps, wheel_wparam, whole_pixels};
+
+    #[test]
+    fn small_scrolls_wait_until_there_is_a_step() {
+        let mut pending = 0;
+        assert_eq!(wheel_steps(10.0, &mut pending), None);
+        assert_eq!(wheel_steps(10.0, &mut pending), None);
+        assert_eq!(wheel_steps(20.0, &mut pending), Some(48));
+        assert_eq!(pending, 0);
+    }
+
+    #[test]
+    fn large_scrolls_go_out_whole() {
+        let mut pending = 0;
+        assert_eq!(wheel_steps(-100.0, &mut pending), Some(-120));
+    }
+
+    #[test]
+    fn turning_around_drops_what_was_left() {
+        let mut pending = 0;
+        assert_eq!(wheel_steps(30.0, &mut pending), None);
+        assert_eq!(wheel_steps(-5.0, &mut pending), None);
+        assert_eq!(pending, -6);
+    }
+
+    #[test]
+    fn small_motions_add_up() {
+        let mut remainder = 0.0;
+        let moved: i32 = (0..8).map(|_| whole_pixels(0.5, &mut remainder)).sum();
+        assert_eq!(moved, 4);
+        let moved: i32 = (0..8).map(|_| whole_pixels(-0.5, &mut remainder)).sum();
+        assert_eq!(moved, -4);
+    }
 
     #[test]
     fn wheel_delta_is_in_the_high_word() {
