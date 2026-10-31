@@ -448,6 +448,10 @@ fn send_keyboard_input(ki: KEYBDINPUT) {
 }
 /// the whole pixels of a motion, keeping the rest for the next one
 fn whole_pixels(delta: f64, remainder: &mut f64) -> i32 {
+    // a NaN would stay in the remainder and stop all further motion
+    if !delta.is_finite() {
+        return 0;
+    }
     let total = delta + *remainder;
     let whole = total.trunc();
     *remainder = total - whole;
@@ -526,7 +530,7 @@ fn wheel_steps(points: f64, pending: &mut i32) -> Option<i32> {
     if units.signum() == -pending.signum() {
         *pending = 0;
     }
-    *pending += units;
+    *pending = pending.saturating_add(units);
     if pending.abs() < SMALLEST_STEP {
         return None;
     }
@@ -687,6 +691,20 @@ mod tests {
         assert_eq!(wheel_steps(30.0, &mut pending), None);
         assert_eq!(wheel_steps(-5.0, &mut pending), None);
         assert_eq!(pending, -6);
+    }
+
+    #[test]
+    fn invalid_motion_leaves_the_remainder_alone() {
+        let mut remainder = 0.5;
+        assert_eq!(whole_pixels(f64::NAN, &mut remainder), 0);
+        assert_eq!(whole_pixels(f64::INFINITY, &mut remainder), 0);
+        assert_eq!(whole_pixels(0.5, &mut remainder), 1);
+    }
+
+    #[test]
+    fn huge_scrolls_do_not_overflow() {
+        let mut pending = 30;
+        assert_eq!(wheel_steps(f64::MAX, &mut pending), Some(i32::MAX));
     }
 
     #[test]
