@@ -9,11 +9,15 @@ use std::collections::{HashMap, HashSet};
 use std::ops::BitOrAssign;
 use std::time::Duration;
 use tokio::task::AbortHandle;
-use windows::Win32::Foundation::{LPARAM, POINT, RECT};
+use windows::Win32::Foundation::{LPARAM, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor, MDT_EFFECTIVE_DPI,
     SetThreadDpiAwarenessContext,
+};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, MAPVK_VK_TO_VSC, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK,
+    MapVirtualKeyW, VIRTUAL_KEY, VK_CONTROL, VK_HANGUL, VK_HANJA, VK_SHIFT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE,
@@ -24,13 +28,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     INPUT_0, KEYEVENTF_EXTENDEDKEY, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, SendInput,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    MAPVK_VK_TO_VSC, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_VIRTUALDESK, MapVirtualKeyW, VIRTUAL_KEY,
-    VK_HANGUL, VK_HANJA,
-};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-    SM_YVIRTUALSCREEN, SetCursorPos, XBUTTON1, XBUTTON2,
+    GetCursorPos, GetSystemMetrics, PostMessageW, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SetCursorPos, WM_MOUSEHWHEEL, WM_MOUSEWHEEL,
+    WindowFromPoint, XBUTTON1, XBUTTON2,
 };
 use windows::core::BOOL;
 
@@ -168,8 +169,8 @@ impl Emulation for WindowsEmulation {
 }
 
 /// A remote device's pointer drawn as its own cursor. The system cursor
-/// only visits it for clicks, scrolling and drags, then returns to where
-/// the local mouse left it.
+/// only visits it for clicks and drags, then returns to where the local
+/// mouse left it. Scrolling goes straight to the window under it.
 struct SecondCursor {
     pointer: Pointer,
     overlay: Option<Overlay>,
@@ -227,10 +228,13 @@ impl SecondCursor {
         let Some(mi) = scroll_input(axis, value) else {
             return;
         };
-        // the wheel goes to the window under the system cursor
+        // the system cursor is already here, and a drag must not lose it
         if !self.held.is_empty() {
             send_mouse_inputs(&[absolute_move(at), mi]);
+        } else if post_scroll(at, axis, value) {
+            // the system cursor stayed with the local mouse
         } else if let Some(back) = cursor_position() {
+            // the wheel input goes to the window under the system cursor
             send_mouse_inputs(&[absolute_move(at), mi, absolute_move(back)]);
         }
     }
@@ -481,6 +485,49 @@ fn scroll(axis: u8, value: i32) {
     }
 }
 
+/// sends a scroll to the window at a point without moving the system cursor,
+/// false if it could not be delivered, as with an elevated window
+fn post_scroll(at: (i32, i32), axis: u8, value: i32) -> bool {
+    // WHEEL is positive up but HWHEEL positive right, like scroll_input
+    let (msg, delta) = match axis {
+        0 => (WM_MOUSEWHEEL, value.saturating_neg()),
+        1 => (WM_MOUSEHWHEEL, value),
+        _ => return false,
+    };
+    let window = unsafe {
+        let previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        let window = WindowFromPoint(POINT { x: at.0, y: at.1 });
+        SetThreadDpiAwarenessContext(previous);
+        window
+    };
+    if window.is_invalid() {
+        return false;
+    }
+    let (control, shift) = unsafe {
+        (
+            GetAsyncKeyState(VK_CONTROL.0 as i32) < 0,
+            GetAsyncKeyState(VK_SHIFT.0 as i32) < 0,
+        )
+    };
+    let wparam = WPARAM(wheel_wparam(delta, control, shift));
+    let lparam = LPARAM(wheel_lparam(at));
+    unsafe { PostMessageW(Some(window), msg, wparam, lparam) }.is_ok()
+}
+
+/// delta in the high word, held modifiers in the low word
+fn wheel_wparam(delta: i32, control: bool, shift: bool) -> usize {
+    const MK_SHIFT: usize = 0x4;
+    const MK_CONTROL: usize = 0x8;
+    let delta = delta.clamp(i16::MIN as i32, i16::MAX as i32) as i16 as u16 as usize;
+    let keys = if control { MK_CONTROL } else { 0 } | if shift { MK_SHIFT } else { 0 };
+    (delta << 16) | keys
+}
+
+/// signed screen coordinates, x in the low word and y in the high word
+fn wheel_lparam((x, y): (i32, i32)) -> isize {
+    (((y as i16 as u16 as u32) << 16) | x as i16 as u16 as u32) as i32 as isize
+}
+
 fn scroll_input(axis: u8, value: i32) -> Option<MOUSEINPUT> {
     // WHEEL is positive up but HWHEEL positive right, like lan-mouse's horizontal axis
     let (event_type, value) = match axis {
@@ -565,4 +612,29 @@ fn linux_keycode_to_windows_scancode(linux_keycode: u32) -> Option<u16> {
     };
     log::trace!("windows code: {windows_scancode:?}");
     Some(windows_scancode as u16)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{wheel_lparam, wheel_wparam};
+
+    #[test]
+    fn wheel_delta_is_in_the_high_word() {
+        assert_eq!(wheel_wparam(120, false, false), 120 << 16);
+        assert_eq!(wheel_wparam(-120, false, false) >> 16, 0xff88);
+        assert_eq!(wheel_wparam(70000, false, false) >> 16, 0x7fff);
+    }
+
+    #[test]
+    fn wheel_keys_are_in_the_low_word() {
+        assert_eq!(wheel_wparam(1, true, false) & 0xffff, 0x8);
+        assert_eq!(wheel_wparam(1, false, true) & 0xffff, 0x4);
+    }
+
+    #[test]
+    fn wheel_point_keeps_negative_coordinates() {
+        let lparam = wheel_lparam((-1920, 300)) as u32;
+        assert_eq!((lparam & 0xffff) as u16 as i16, -1920);
+        assert_eq!((lparam >> 16) as u16 as i16, 300);
+    }
 }
