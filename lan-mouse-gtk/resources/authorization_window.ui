@@ -4,94 +4,79 @@
   <requires lib="libadwaita" version="1.0"/>
   <template class="AuthorizationWindow" parent="AdwWindow">
     <property name="modal">True</property>
-    <property name="width-request">180</property>
-    <property name="default-width">180</property>
-    <property name="height-request">180</property>
-    <property name="default-height">180</property>
+    <property name="width-request">360</property>
+    <property name="default-width">480</property>
     <property name="title" translatable="yes">Unauthorized Device</property>
+    <style>
+      <class name="glass-window"/>
+    </style>
     <property name="content">
       <object class="GtkBox">
         <property name="orientation">vertical</property>
-        <property name="vexpand">True</property>
         <child type="top">
-          <object class="AdwHeaderBar">
-            <style>
-              <class name="flat"/>
-            </style>
-          </object>
+          <object class="AdwHeaderBar"/>
         </child>
         <child>
           <object class="GtkBox">
             <property name="orientation">vertical</property>
-            <property name="spacing">30</property>
-            <property name="margin-start">30</property>
-            <property name="margin-end">30</property>
-            <property name="margin-top">30</property>
-            <property name="margin-bottom">30</property>
+            <property name="spacing">20</property>
+            <property name="margin-start">28</property>
+            <property name="margin-end">28</property>
+            <property name="margin-top">4</property>
+            <property name="margin-bottom">28</property>
             <child>
               <object class="GtkLabel">
-                <property name="label">An unauthorized Device is trying to connect. Do you want to authorize this Device?</property>
-                <property name="width-request">100</property>
-                <property name="wrap">word-wrap</property>
+                <property name="label" translatable="yes">A new device wants to connect</property>
+                <property name="wrap">True</property>
+                <style>
+                  <class name="title-2"/>
+                </style>
               </object>
             </child>
             <child>
-              <object class="AdwPreferencesGroup">
-                <property name="title">sha256 fingerprint</property>
+              <object class="GtkLabel">
+                <property name="label" translatable="yes">Only authorize it if this fingerprint matches the one shown on that device.</property>
+                <property name="wrap">True</property>
+                <property name="justify">center</property>
+              </object>
+            </child>
+            <child>
+              <object class="GtkLabel" id="fingerprint">
+                <property name="wrap">True</property>
+                <property name="wrap-mode">word-char</property>
+                <property name="justify">center</property>
+                <property name="max-width-chars">48</property>
+                <style>
+                  <class name="glass"/>
+                  <class name="fingerprint-well"/>
+                </style>
+              </object>
+            </child>
+            <child>
+              <object class="GtkBox">
+                <property name="spacing">12</property>
+                <property name="homogeneous">True</property>
                 <child>
-                  <object class="AdwActionRow">
-                    <property name="child">
-                      <object class="GtkLabel" id="fingerprint">
-                        <property name="ellipsize">PANGO_ELLIPSIZE_NONE</property>
-                        <property name="vexpand">True</property>
-                        <property name="hexpand">False</property>
-                        <property name="wrap">True</property>
-                        <property name="wrap-mode">word-char</property>
-                        <property name="justify">center</property>
-                        <property name="xalign">0.5</property>
-                        <property name="margin-top">10</property>
-                        <property name="margin-bottom">10</property>
-                        <property name="margin-start">10</property>
-                        <property name="margin-end">10</property>
-                        <property name="width-chars">64</property>
-                      </object>
-                    </property>
+                  <object class="GtkButton" id="cancel_button">
+                    <signal name="clicked" handler="handle_cancel" swapped="true"/>
+                    <property name="label" translatable="yes">Cancel</property>
+                    <property name="can-shrink">True</property>
+                    <style>
+                      <class name="pill"/>
+                    </style>
                   </object>
                 </child>
-              </object>
-            </child>
-          </object>
-        </child>
-        <child>
-          <object class="GtkBox">
-            <property name="margin-start">30</property>
-            <property name="margin-end">30</property>
-            <property name="margin-top">30</property>
-            <property name="margin-bottom">30</property>
-            <property name="orientation">horizontal</property>
-            <property name="spacing">30</property>
-            <property name="hexpand">True</property>
-            <property name="vexpand">True</property>
-            <property name="valign">end</property>
-            <child>
-              <object class="GtkButton" id="cancel_button">
-                <signal name="clicked" handler="handle_cancel" swapped="true"/>
-                <property name="label" translatable="yes">Cancel</property>
-                <property name="can-shrink">True</property>
-                <property name="height-request">50</property>
-                <property name="hexpand">True</property>
-              </object>
-            </child>
-            <child>
-              <object class="GtkButton" id="confirm_button">
-                <signal name="clicked" handler="handle_confirm" swapped="true"/>
-                <property name="label" translatable="yes">Authorize</property>
-                <property name="can-shrink">True</property>
-                <property name="height-request">50</property>
-                <property name="hexpand">True</property>
-                <style>
-                  <class name="destructive-action"/>
-                </style>
+                <child>
+                  <object class="GtkButton" id="confirm_button">
+                    <signal name="clicked" handler="handle_confirm" swapped="true"/>
+                    <property name="label" translatable="yes">Authorize</property>
+                    <property name="can-shrink">True</property>
+                    <style>
+                      <class name="pill"/>
+                      <class name="suggested-action"/>
+                    </style>
+                  </object>
+                </child>
               </object>
             </child>
           </object>

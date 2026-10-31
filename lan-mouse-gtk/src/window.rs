@@ -66,8 +66,43 @@ impl Window {
                 }
             }
         ));
-        self.imp().layout_group.add(editor.widget());
+        self.imp().layout_stage.append(editor.widget());
         self.imp().layout_editor.replace(Some(editor));
+    }
+
+    /// Sums up on the home page whether input is being shared right now.
+    fn update_summary(&self) {
+        let imp = self.imp();
+        let total = self.clients().n_items();
+        let on = self
+            .clients()
+            .iter::<ClientObject>()
+            .flatten()
+            .filter(|c| c.property::<bool>("active"))
+            .collect::<Vec<_>>();
+        let (state, title) = if !imp.capture_active.get() || !imp.emulation_active.get() {
+            ("warn", "Input sharing needs attention".to_owned())
+        } else if total == 0 {
+            ("idle", "Add your first device".to_owned())
+        } else {
+            match on.as_slice() {
+                [] => ("idle", "All devices are off".to_owned()),
+                [one] => {
+                    let name = one
+                        .property::<Option<String>>("hostname")
+                        .unwrap_or_else(|| "1 device".to_owned());
+                    ("ok", format!("Sharing with {name}"))
+                }
+                many => ("ok", format!("Sharing with {} devices", many.len())),
+            }
+        };
+        imp.summary_orb.set_css_classes(&["orb", state]);
+        imp.summary_title.set_text(&title);
+        imp.summary_detail.set_text(&format!(
+            "{} · port {}",
+            imp.hostname_label.text(),
+            imp.port.get()
+        ));
     }
 
     fn layout_editor(&self) -> LayoutEditor {
@@ -329,6 +364,7 @@ impl Window {
         self.clients().append(&client);
         self.update_placeholder_visibility();
         self.update_dns_state(handle, !state.ips.is_empty());
+        self.update_summary();
     }
 
     pub(super) fn update_client_list(
@@ -350,6 +386,7 @@ impl Window {
             self.show_toast(msg.as_str());
         }
         self.imp().set_port(port);
+        self.update_summary();
     }
 
     fn client_idx(&self, handle: ClientHandle) -> Option<usize> {
@@ -369,6 +406,7 @@ impl Window {
         if self.clients().n_items() == 0 {
             self.update_placeholder_visibility();
         }
+        self.update_summary();
     }
 
     pub(super) fn update_client_config(&self, handle: ClientHandle, client: ClientConfig) {
@@ -416,6 +454,7 @@ impl Window {
             crate::client_object::peer_commit_to_string(state.peer_commit),
         );
         row.refresh_version_status();
+        self.update_summary();
     }
 
     fn client_object_for_handle(&self, handle: ClientHandle) -> Option<ClientObject> {
@@ -520,6 +559,7 @@ impl Window {
     fn update_capture_emulation_status(&self) {
         let capture = self.imp().capture_active.get();
         let emulation = self.imp().emulation_active.get();
+        self.update_summary();
 
         #[cfg(target_os = "macos")]
         {
@@ -558,13 +598,13 @@ impl Window {
             // AX granted but capture/emulation still off → the daemon
             // subprocess bailed at startup and needs a fresh process to
             // re-initialize with the new grant in place.
-            row.set_title("relaunch required");
+            row.set_title("Relaunch required");
             row.set_subtitle("Accessibility granted — restart to activate capture and emulation");
             set_button_content_label(button, "Relaunch");
         } else {
             // AX missing → send the user to System Settings.
-            row.set_title("input capture is disabled");
-            row.set_subtitle("grant Accessibility permission to enable");
+            row.set_title("Input capture is disabled");
+            row.set_subtitle("Grant Accessibility permission to enable");
             set_button_content_label(button, "Grant");
         }
     }

@@ -17,7 +17,7 @@ Share one mouse and keyboard between a Mac and Windows PCs. Based on Lan Mouse.
   넘어갈 수 있어요.
 - **연결 끊김 수정 (Windows)**: 한 번 연결이 끊기면 다시 받지 못하던 문제를 고쳤어요
   ([lan-mouse#262](https://github.com/feschber/lan-mouse/issues/262)).
-- **화면 배치**: 설정 창의 Layout에서 기기마다 실제 모니터 크기대로 끌어다 놓아요. 화면이
+- **화면 배치**: 홈 화면의 Layout에서 기기마다 실제 모니터 크기대로 끌어다 놓아요. 화면이
   맞닿은 구간으로만 넘어가고, 넘어간 자리 그대로 들어가요. 가장자리 하나를 여러 기기가 나눠 쓸
   수 있어요. 모서리를 끌면 크기가 바뀌고, 더블클릭하면 실제 크기로 돌아와요 (맥·Windows,
   이 기기에서 나가는 쪽에 적용).

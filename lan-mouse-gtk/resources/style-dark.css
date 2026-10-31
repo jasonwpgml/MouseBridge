@@ -1,0 +1,20 @@
+/* libadwaita loads this after style.css while the dark scheme is active */
+
+@define-color glass_field #0b0f1e;
+@define-color glass_orb_a #2467d6;
+@define-color glass_orb_b #6a36c9;
+@define-color glass_orb_c #b83a78;
+@define-color glass_orb_d #0f7f83;
+@define-color glass_fill rgba(255, 255, 255, 0.09);
+@define-color glass_fill_strong rgba(255, 255, 255, 0.16);
+@define-color glass_hover rgba(255, 255, 255, 0.07);
+@define-color glass_edge rgba(255, 255, 255, 0.17);
+@define-color glass_shine rgba(255, 255, 255, 0.24);
+@define-color glass_rim rgba(0, 0, 0, 0.25);
+@define-color glass_shadow rgba(0, 0, 0, 0.38);
+@define-color glass_ink rgba(244, 247, 255, 0.95);
+@define-color glass_divider rgba(255, 255, 255, 0.09);
+@define-color glass_well rgba(0, 0, 0, 0.22);
+@define-color glass_menu #20263a;
+@define-color glass_ok #3ddc9f;
+@define-color glass_warn #f6b04a;

@@ -1,12 +1,320 @@
-.peer-match > box > list .subtitle {
-    color: @success_color;
+/* Glass: GTK cannot blur what lies behind a widget, so every window paints
+ * its own soft colour field and the panels are translucent layers over it.
+ * Colours for dark mode are redefined in style-dark.css. */
+
+@define-color glass_field #e9eefa;
+@define-color glass_orb_a #7cc8ff;
+@define-color glass_orb_b #b9a6ff;
+@define-color glass_orb_c #ffc3b0;
+@define-color glass_orb_d #93e6cd;
+@define-color glass_fill rgba(255, 255, 255, 0.46);
+@define-color glass_fill_strong rgba(255, 255, 255, 0.72);
+@define-color glass_hover rgba(255, 255, 255, 0.30);
+@define-color glass_edge rgba(255, 255, 255, 0.75);
+@define-color glass_shine rgba(255, 255, 255, 0.85);
+@define-color glass_rim rgba(40, 50, 90, 0.10);
+@define-color glass_shadow rgba(40, 50, 100, 0.16);
+@define-color glass_ink rgba(20, 26, 48, 0.92);
+@define-color glass_divider rgba(30, 40, 80, 0.09);
+@define-color glass_well rgba(255, 255, 255, 0.42);
+@define-color glass_menu #f5f7fd;
+@define-color glass_accent #2f7bf6;
+@define-color glass_accent_light #63a4ff;
+@define-color glass_ok #17a673;
+@define-color glass_warn #b86a00;
+
+window.glass-window {
+    color: @glass_ink;
+    background-color: @glass_field;
+    background-image:
+        radial-gradient(circle farthest-side at 8% 4%, alpha(@glass_orb_a, 0.95), alpha(@glass_orb_a, 0) 62%),
+        radial-gradient(circle farthest-side at 96% 12%, alpha(@glass_orb_b, 0.95), alpha(@glass_orb_b, 0) 58%),
+        radial-gradient(circle farthest-side at 88% 98%, alpha(@glass_orb_c, 0.90), alpha(@glass_orb_c, 0) 60%),
+        radial-gradient(circle farthest-side at 10% 96%, alpha(@glass_orb_d, 0.85), alpha(@glass_orb_d, 0) 58%);
 }
 
-.peer-mismatch > box > list .subtitle {
+/* the title bar is part of the colour field */
+window.glass-window headerbar {
+    background: none;
+    box-shadow: none;
+    border: none;
+    color: @glass_ink;
+    min-height: 54px;
+}
+
+window.glass-window viewstack,
+window.glass-window scrolledwindow,
+window.glass-window toastoverlay {
+    background: none;
+}
+
+window.glass-window scrolledwindow > undershoot {
+    background: none;
+    box-shadow: none;
+}
+
+.brand {
+    font-weight: 700;
+    letter-spacing: -0.2px;
+}
+
+.hero-title {
+    font-size: 30px;
+    font-weight: 700;
+    letter-spacing: -0.6px;
+}
+
+.hero-detail {
+    margin-left: 26px;
+    opacity: 0.68;
+}
+
+.orb {
+    min-width: 14px;
+    min-height: 14px;
+    border-radius: 999px;
+    transition: background-color 300ms ease, box-shadow 300ms ease;
+}
+
+.orb.ok {
+    background-color: @glass_ok;
+    box-shadow: 0 0 0 4px alpha(@glass_ok, 0.20), 0 0 16px alpha(@glass_ok, 0.65);
+}
+
+.orb.idle {
+    background-color: alpha(@glass_ink, 0.35);
+    box-shadow: 0 0 0 4px alpha(@glass_ink, 0.08);
+}
+
+.orb.warn {
+    background-color: @glass_warn;
+    box-shadow: 0 0 0 4px alpha(@glass_warn, 0.20), 0 0 16px alpha(@glass_warn, 0.65);
+}
+
+/* panels */
+
+.glass,
+window.glass-window list.boxed-list {
+    background-color: @glass_fill;
+    background-image: linear-gradient(165deg, alpha(white, 0.16), alpha(white, 0) 42%);
+    border: 1px solid @glass_edge;
+    border-radius: 22px;
+    box-shadow:
+        inset 0 1px 0 @glass_shine,
+        inset 0 -1px 0 @glass_rim,
+        0 14px 34px @glass_shadow,
+        0 2px 6px alpha(@glass_shadow, 0.5);
+}
+
+.stage {
+    min-height: 420px;
+}
+
+/* rows */
+
+window.glass-window list.boxed-list > row,
+window.glass-window list.boxed-list > row.expander > box > list > row {
+    background: none;
+    color: @glass_ink;
+    border-color: @glass_divider;
+    transition: background-color 150ms ease;
+}
+
+window.glass-window list.boxed-list > row {
+    border-bottom: 1px solid @glass_divider;
+}
+
+window.glass-window list.boxed-list > row:first-child {
+    border-top-left-radius: 21px;
+    border-top-right-radius: 21px;
+}
+
+window.glass-window list.boxed-list > row:last-child {
+    border-bottom: none;
+    border-bottom-left-radius: 21px;
+    border-bottom-right-radius: 21px;
+}
+
+window.glass-window list.boxed-list > row.activatable:hover,
+window.glass-window list.boxed-list > row.expander > box > list > row.activatable:hover,
+window.glass-window list.boxed-list > row.expander > box > .header:hover {
+    background-color: @glass_hover;
+}
+
+window.glass-window list.boxed-list > row.expander > box > list {
+    background: none;
+    box-shadow: inset 0 1px 0 @glass_divider;
+}
+
+window.glass-window list.boxed-list > row.expander > box > list > row {
+    border-bottom: 1px solid @glass_divider;
+}
+
+window.glass-window list.boxed-list > row.expander > box > list > row:last-child {
+    border-bottom: none;
+}
+
+.fingerprint .subtitle,
+.key-row .subtitle {
+    font-family: monospace;
+    font-size: 11px;
+}
+
+.fingerprint-well {
+    padding: 14px 16px;
+    font-family: monospace;
+    font-size: 12px;
+    border-radius: 16px;
+}
+
+.attention list.boxed-list {
+    background-color: alpha(@glass_warn, 0.20);
+    border-color: alpha(@glass_warn, 0.45);
+}
+
+/* controls: buttons are clear capsules that catch the light */
+
+window.glass-window list button:not(.flat):not(.suggested-action),
+window.glass-window button.pill:not(.suggested-action) {
+    background-color: @glass_fill_strong;
+    background-image: linear-gradient(to bottom, alpha(white, 0.22), alpha(white, 0));
+    border: 1px solid @glass_edge;
+    box-shadow: inset 0 1px 0 @glass_shine, 0 1px 3px @glass_shadow;
+    transition: background-color 150ms ease, box-shadow 150ms ease;
+}
+
+window.glass-window list button:not(.flat):not(.suggested-action):hover,
+window.glass-window button.pill:not(.suggested-action):hover {
+    box-shadow: inset 0 1px 0 @glass_shine, 0 3px 10px @glass_shadow;
+}
+
+window.glass-window button.compact {
+    min-height: 30px;
+    padding: 0 14px;
+    border-radius: 999px;
+}
+
+window.glass-window button.success {
+    color: @glass_ok;
+}
+
+window.glass-window button.warning,
+window.glass-window image.warning {
+    color: @glass_warn;
+}
+
+window.glass-window image.success {
+    color: @glass_ok;
+}
+
+window.glass-window button.error {
+    color: @error_color;
+}
+
+window.glass-window button.suggested-action,
+window.glass-window button.destructive-action {
+    color: white;
+    font-weight: 600;
+    border: 1px solid alpha(white, 0.28);
+    box-shadow: inset 0 1px 0 alpha(white, 0.42), 0 6px 16px alpha(@glass_accent, 0.32);
+    background-color: @glass_accent;
+    background-image: linear-gradient(to bottom, @glass_accent_light, @glass_accent);
+}
+
+window.glass-window entry {
+    color: inherit;
+    background-color: @glass_well;
+    border: 1px solid @glass_divider;
+    border-radius: 12px;
+    box-shadow: inset 0 1px 2px alpha(@glass_shadow, 0.7);
+}
+
+window.glass-window switch {
+    background-color: alpha(@glass_ink, 0.16);
+    border-radius: 999px;
+    box-shadow: inset 0 1px 2px alpha(@glass_shadow, 0.8);
+}
+
+window.glass-window switch:checked {
+    background-color: @glass_accent;
+    background-image: linear-gradient(to bottom, @glass_accent_light, @glass_accent);
+}
+
+window.glass-window switch > slider {
+    background-color: white;
+    border-radius: 999px;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.30);
+}
+
+/* the two pages */
+
+viewswitcher {
+    background-color: @glass_fill;
+    border: 1px solid @glass_edge;
+    border-radius: 999px;
+    padding: 3px;
+    box-shadow: inset 0 1px 0 @glass_shine, 0 4px 14px @glass_shadow;
+}
+
+viewswitcher > button.toggle {
+    border-radius: 999px;
+    min-height: 28px;
+    padding: 0 12px;
+    margin: 0;
+    background: none;
+    box-shadow: none;
+    color: inherit;
+    opacity: 0.72;
+    transition: background-color 180ms ease, opacity 180ms ease;
+}
+
+viewswitcher > button.toggle:hover {
+    opacity: 1;
+}
+
+viewswitcher > button.toggle:checked {
+    opacity: 1;
+    background-color: @glass_fill_strong;
+    box-shadow: inset 0 1px 0 @glass_shine, 0 1px 4px @glass_shadow;
+}
+
+/* floating surfaces sit on the desktop, not the colour field */
+
+popover > contents {
+    color: @glass_ink;
+    background-color: @glass_menu;
+    border-radius: 16px;
+    border: 1px solid @glass_edge;
+    box-shadow: 0 12px 30px @glass_shadow;
+}
+
+popover > arrow {
+    background-color: @glass_menu;
+    border-color: @glass_edge;
+}
+
+toast {
+    color: @glass_ink;
+    background-color: @glass_fill_strong;
+    border: 1px solid @glass_edge;
+    border-radius: 999px;
+    box-shadow: inset 0 1px 0 @glass_shine, 0 10px 26px @glass_shadow;
+}
+
+/* the build version shown under each device */
+
+.peer-match .subtitle {
+    opacity: 1;
+    color: @glass_ok;
+}
+
+.peer-mismatch .subtitle {
+    opacity: 1;
     font-weight: bold;
-    color: @warning_color;
+    color: @glass_warn;
 }
 
-.peer-unknown > box > list .subtitle {
-    color: @warning_color;
+.peer-unknown .subtitle {
+    opacity: 1;
+    color: @glass_warn;
 }

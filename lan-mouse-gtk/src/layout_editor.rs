@@ -202,6 +202,38 @@ impl State {
         }
     }
 
+    /// Stretches where this device's displays touch another device's, which
+    /// is where the pointer crosses. The tolerance matches `src/layout.rs`.
+    fn bridges(&self) -> Vec<((f64, f64), (f64, f64))> {
+        const TOUCH_TOLERANCE: f64 = 2.0;
+        let near = |p: f64, q: f64| (p - q).abs() <= TOUCH_TOLERANCE;
+        let mine = self.display_rects(Key::Local);
+        let mut bridges = Vec::new();
+        for other in self.visible().into_iter().filter(|&k| k != Key::Local) {
+            for o in self.display_rects(other) {
+                for m in &mine {
+                    let (top, bottom) = (m.1.max(o.1), m.3.min(o.3));
+                    if top < bottom {
+                        for x in [(m.2, o.0), (m.0, o.2)] {
+                            if near(x.0, x.1) {
+                                bridges.push(((x.0, top), (x.0, bottom)));
+                            }
+                        }
+                    }
+                    let (left, right) = (m.0.max(o.0), m.2.min(o.2));
+                    if left < right {
+                        for y in [(m.3, o.1), (m.1, o.3)] {
+                            if near(y.0, y.1) {
+                                bridges.push(((left, y.0), (right, y.0)));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        bridges
+    }
+
     /// Moves a dragged device so its edges meet or line up with nearby
     /// edges of other devices.
     fn snap(&mut self, key: Key) {
@@ -279,6 +311,7 @@ impl LayoutEditor {
         let area = gtk::DrawingArea::builder()
             .content_height(280)
             .hexpand(true)
+            .vexpand(true)
             .build();
         let state = Rc::new(RefCell::new(State::default()));
         let on_change: Rc<OnChange> = Rc::new(Box::new(on_change));
@@ -458,16 +491,127 @@ impl LayoutEditor {
 
 /// fill colors, the local device first
 const COLORS: [(f64, f64, f64); 5] = [
-    (0.21, 0.52, 0.89),
-    (0.90, 0.38, 0.62),
-    (0.20, 0.68, 0.47),
-    (0.96, 0.62, 0.17),
-    (0.57, 0.39, 0.85),
+    (0.18, 0.48, 0.96),
+    (0.91, 0.33, 0.62),
+    (0.09, 0.65, 0.45),
+    (0.95, 0.58, 0.12),
+    (0.55, 0.36, 0.93),
 ];
+
+/// corner radius of a display in widget pixels
+const DISPLAY_RADIUS_PX: f64 = 10.0;
+/// spacing of the dots behind the displays
+const GRID_PX: f64 = 22.0;
+
+fn rounded_rect(cr: &cairo::Context, (x, y, w, h): (f64, f64, f64, f64), radius: f64) {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let r = radius.min(w / 2.0).min(h / 2.0).max(0.0);
+    cr.new_sub_path();
+    cr.arc(x + w - r, y + r, r, -FRAC_PI_2, 0.0);
+    cr.arc(x + w - r, y + h - r, r, 0.0, FRAC_PI_2);
+    cr.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
+    cr.arc(x + r, y + r, r, PI, PI + FRAC_PI_2);
+    cr.close_path();
+}
+
+/// a pane of tinted glass: soft shadow, colored body, light catching its top
+fn draw_display(
+    cr: &cairo::Context,
+    rect: (f64, f64, f64, f64),
+    (r, g, b): (f64, f64, f64),
+    lifted: bool,
+    dashed: bool,
+    dark: bool,
+) {
+    let (x, y, w, h) = rect;
+    let (reach, strength) = if lifted { (8, 0.05) } else { (4, 0.045) };
+    for i in (1..=reach).rev() {
+        let spread = i as f64 * 1.5;
+        rounded_rect(
+            cr,
+            (
+                x - spread,
+                y - spread + 3.0,
+                w + 2.0 * spread,
+                h + 2.0 * spread,
+            ),
+            DISPLAY_RADIUS_PX + spread,
+        );
+        cr.set_source_rgba(0.05, 0.08, 0.2, strength);
+        let _ = cr.fill();
+    }
+
+    let body = cairo::LinearGradient::new(x, y, x + w * 0.4, y + h);
+    let (top, bottom) = if dark { (0.62, 0.32) } else { (0.62, 0.38) };
+    body.add_color_stop_rgba(0.0, r, g, b, top);
+    body.add_color_stop_rgba(1.0, r, g, b, bottom);
+    rounded_rect(cr, rect, DISPLAY_RADIUS_PX);
+    let _ = cr.set_source(&body);
+    let _ = cr.fill();
+
+    // light falling on the upper part of the pane
+    let sheen = cairo::LinearGradient::new(x, y, x, y + h * 0.55);
+    sheen.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, 0.30);
+    sheen.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.0);
+    rounded_rect(cr, rect, DISPLAY_RADIUS_PX);
+    let _ = cr.set_source(&sheen);
+    let _ = cr.fill();
+
+    if dashed {
+        cr.set_dash(&[5.0, 4.0], 0.0);
+    }
+    rounded_rect(
+        cr,
+        (x + 0.75, y + 0.75, w - 1.5, h - 1.5),
+        DISPLAY_RADIUS_PX - 0.75,
+    );
+    cr.set_source_rgba(1.0, 1.0, 1.0, if dark { 0.42 } else { 0.78 });
+    cr.set_line_width(1.5);
+    let _ = cr.stroke();
+    cr.set_dash(&[], 0.0);
+}
+
+/// a glowing line where the pointer can cross
+fn draw_bridge(cr: &cairo::Context, from: (f64, f64), to: (f64, f64)) {
+    cr.set_line_cap(cairo::LineCap::Round);
+    for (width, alpha) in [(13.0, 0.18), (7.0, 0.40), (3.0, 1.0)] {
+        cr.move_to(from.0, from.1);
+        cr.line_to(to.0, to.1);
+        cr.set_line_width(width);
+        if alpha == 1.0 {
+            cr.set_source_rgba(1.0, 1.0, 1.0, 1.0);
+        } else {
+            cr.set_source_rgba(0.15, 0.55, 1.0, alpha);
+        }
+        let _ = cr.stroke();
+    }
+    cr.set_line_cap(cairo::LineCap::Butt);
+}
+
+fn draw_grid(cr: &cairo::Context, width: f64, height: f64, ink: f64) {
+    cr.set_source_rgba(ink, ink, ink, 0.13);
+    let mut y = GRID_PX / 2.0;
+    while y < height {
+        let mut x = GRID_PX / 2.0;
+        while x < width {
+            cr.new_sub_path();
+            cr.arc(x, y, 0.9, 0.0, std::f64::consts::TAU);
+            x += GRID_PX;
+        }
+        y += GRID_PX;
+    }
+    let _ = cr.fill();
+}
 
 fn draw(state: &State, area: &gtk::DrawingArea, cr: &cairo::Context) {
     let dark = adw::StyleManager::default().is_dark();
-    let ink = if dark { 0.92 } else { 0.15 };
+    let ink = if dark { 0.96 } else { 0.08 };
+    draw_grid(cr, area.width() as f64, area.height() as f64, ink);
+    cr.select_font_face(
+        "sans-serif",
+        cairo::FontSlant::Normal,
+        cairo::FontWeight::Bold,
+    );
     let Some(view) = state.view else {
         cr.set_source_rgb(ink, ink, ink);
         cr.set_font_size(13.0);
@@ -490,16 +634,14 @@ fn draw(state: &State, area: &gtk::DrawingArea, cr: &cairo::Context) {
         for rect in &rects {
             let (l, t) = view.to_widget((rect.0, rect.1));
             let (rr, bb) = view.to_widget((rect.2, rect.3));
-            cr.rectangle(l + 1.0, t + 1.0, rr - l - 2.0, bb - t - 2.0);
-            cr.set_source_rgba(r, g, b, if dragging { 0.55 } else { 0.35 });
-            let _ = cr.fill_preserve();
-            cr.set_source_rgb(r, g, b);
-            cr.set_line_width(1.5);
-            if item.placement.is_none() {
-                cr.set_dash(&[5.0, 4.0], 0.0);
-            }
-            let _ = cr.stroke();
-            cr.set_dash(&[], 0.0);
+            draw_display(
+                cr,
+                (l + 1.0, t + 1.0, rr - l - 2.0, bb - t - 2.0),
+                (r, g, b),
+                dragging,
+                item.placement.is_none(),
+                dark,
+            );
         }
 
         // name and size on the widest display
@@ -520,7 +662,7 @@ fn draw(state: &State, area: &gtk::DrawingArea, cr: &cairo::Context) {
         }
         let (l, _) = view.to_widget((largest.0, largest.1));
         let (r_, _) = view.to_widget((largest.2, largest.3));
-        cr.set_source_rgb(ink, ink, ink);
+        cr.set_source_rgba(1.0, 1.0, 1.0, 0.98);
         for (i, line) in lines.iter().enumerate() {
             let largest_size = if i == 0 { 12.0 } else { 10.0 };
             let Some((line, ext)) = fit_text(cr, line, r_ - l - 8.0, largest_size) else {
@@ -534,15 +676,24 @@ fn draw(state: &State, area: &gtk::DrawingArea, cr: &cairo::Context) {
         // resize handle at the bottom right
         if let Some(bounds) = state.bounds(key) {
             let (hx, hy) = view.to_widget((bounds.2, bounds.3));
-            cr.rectangle(
-                hx - HANDLE_PX / 2.0,
-                hy - HANDLE_PX / 2.0,
-                HANDLE_PX,
-                HANDLE_PX,
+            cr.new_path();
+            cr.arc(
+                hx - 2.0,
+                hy - 2.0,
+                HANDLE_PX / 2.0,
+                0.0,
+                std::f64::consts::TAU,
             );
+            cr.set_source_rgb(1.0, 1.0, 1.0);
+            let _ = cr.fill_preserve();
             cr.set_source_rgb(r, g, b);
-            let _ = cr.fill();
+            cr.set_line_width(2.5);
+            let _ = cr.stroke();
         }
+    }
+
+    for (from, to) in state.bridges() {
+        draw_bridge(cr, view.to_widget(from), view.to_widget(to));
     }
 }
 
@@ -635,6 +786,23 @@ mod tests {
         state.snap(Key::Client(0));
         let p = state.items[&Key::Client(0)].placement.unwrap();
         assert_eq!((p.x, p.y), (0, 0));
+    }
+
+    #[test]
+    fn bridge_spans_only_the_stretch_the_displays_share() {
+        let mut state = state();
+        // desktop above the Mac, overhanging its right side
+        state.items.get_mut(&Key::Client(0)).unwrap().placement = Some(Placement {
+            x: 500,
+            y: 0,
+            size: 100,
+        });
+        assert_eq!(state.bridges(), vec![((500.0, 1080.0), (1470.0, 1080.0))]);
+    }
+
+    #[test]
+    fn no_bridge_between_apart_devices() {
+        assert!(state().bridges().is_empty());
     }
 
     #[test]

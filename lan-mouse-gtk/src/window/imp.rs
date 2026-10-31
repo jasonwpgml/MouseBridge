@@ -47,7 +47,13 @@ pub struct Window {
     #[template_child]
     pub authorized_list: TemplateChild<ListBox>,
     #[template_child]
-    pub layout_group: TemplateChild<PreferencesGroup>,
+    pub layout_stage: TemplateChild<gtk::Box>,
+    #[template_child]
+    pub summary_orb: TemplateChild<gtk::Box>,
+    #[template_child]
+    pub summary_title: TemplateChild<Label>,
+    #[template_child]
+    pub summary_detail: TemplateChild<Label>,
     pub(crate) layout_editor: RefCell<Option<LayoutEditor>>,
     pub clients: RefCell<Option<gio::ListStore>>,
     pub authorized: RefCell<Option<gio::ListStore>>,
@@ -92,14 +98,14 @@ impl Window {
             clipboard.set_text(hostname.to_str().expect("hostname: invalid utf8"));
             let icon = self.hostname_copy_icon.clone();
             icon.set_icon_name(Some("emblem-ok-symbolic"));
-            icon.set_css_classes(&["success"]);
+            icon.add_css_class("success");
             glib::spawn_future_local(clone!(
                 #[weak]
                 icon,
                 async move {
                     glib::timeout_future_seconds(1).await;
                     icon.set_icon_name(Some("edit-copy-symbolic"));
-                    icon.set_css_classes(&[]);
+                    icon.remove_css_class("success");
                 }
             ));
         }
@@ -112,14 +118,14 @@ impl Window {
         let clipboard = display.clipboard();
         clipboard.set_text(&fingerprint);
         button.set_icon_name("emblem-ok-symbolic");
-        button.set_css_classes(&["success"]);
+        button.add_css_class("success");
         glib::spawn_future_local(clone!(
             #[weak]
             button,
             async move {
                 glib::timeout_future_seconds(1).await;
                 button.set_icon_name("edit-copy-symbolic");
-                button.set_css_classes(&[]);
+                button.remove_css_class("success");
             }
         ));
     }

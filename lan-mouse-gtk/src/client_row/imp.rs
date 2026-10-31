@@ -216,9 +216,9 @@ impl ClientRow {
 
     pub(super) fn set_dns_state(&self, resolved: bool) {
         if resolved {
-            self.dns_button.set_css_classes(&["success"])
+            self.dns_button.set_css_classes(&["circular", "success"])
         } else {
-            self.dns_button.set_css_classes(&["warning"])
+            self.dns_button.set_css_classes(&["circular", "warning"])
         }
     }
 }
