@@ -19,15 +19,17 @@ use windows::core::{PCWSTR, w};
 
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DispatchMessageW, EDD_GET_DEVICE_INTERFACE_NAME, GetMessageW,
-    HOOKPROC, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG, MSLLHOOKSTRUCT, PostThreadMessageW,
-    RegisterClassW, SetWindowsHookExW, TranslateMessage, WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOW_STYLE,
-    WM_DISPLAYCHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-    WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER, WM_XBUTTONDOWN, WM_XBUTTONUP, WNDCLASSW, WNDPROC,
+    HOOKPROC, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT,
+    PostThreadMessageW, RegisterClassW, SetWindowsHookExW, TranslateMessage, WH_KEYBOARD_LL,
+    WH_MOUSE_LL, WINDOW_STYLE, WM_DISPLAYCHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_USER, WM_XBUTTONDOWN,
+    WM_XBUTTONUP, WNDCLASSW, WNDPROC,
 };
 
 use input_event::{
     BTN_BACK, BTN_FORWARD, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Event, KeyboardEvent, PointerEvent,
+    WINDOWS_INJECTED_TAG,
     scancode::{self, Linux},
 };
 
@@ -319,7 +321,29 @@ fn check_client_activation(wparam: WPARAM, lparam: LPARAM) -> bool {
     ret
 }
 
+/// Lets input another program injected through, such as a remote desktop
+/// host. Its pointer jumps anywhere on screen, so it must neither cross a
+/// barrier nor reach a client as motion.
+fn pass_foreign_input(wparam: WPARAM, lparam: LPARAM) -> bool {
+    let mouse_low_level: MSLLHOOKSTRUCT = unsafe { *(lparam.0 as *const MSLLHOOKSTRUCT) };
+    let foreign = mouse_low_level.flags & LLMHF_INJECTED != 0
+        && mouse_low_level.dwExtraInfo != WINDOWS_INJECTED_TAG;
+    if foreign && wparam.0 == WM_MOUSEMOVE as usize {
+        let pos = (mouse_low_level.pt.x, mouse_low_level.pt.y);
+        PREV_POS.replace(Some(pos));
+        // real motion while capturing is measured from where the cursor is
+        if ACTIVE_CLIENT.get().is_some() {
+            ENTRY_POINT.replace(pos);
+        }
+    }
+    foreign
+}
+
 unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if pass_foreign_input(wparam, lparam) {
+        return CallNextHookEx(None, ncode, wparam, lparam);
+    }
+
     let active = check_client_activation(wparam, lparam);
 
     /* no client was active */

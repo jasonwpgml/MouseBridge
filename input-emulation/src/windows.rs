@@ -1,7 +1,7 @@
 use super::error::{EmulationError, WindowsEmulationCreationError};
 use input_event::{
     BTN_BACK, BTN_FORWARD, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Event, KeyboardEvent, PointerEvent,
-    scancode,
+    WINDOWS_INJECTED_TAG, scancode,
 };
 
 use async_trait::async_trait;
@@ -383,7 +383,7 @@ fn absolute_move((x, y): (i32, i32)) -> MOUSEINPUT {
         mouseData: 0,
         dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
         time: 0,
-        dwExtraInfo: 0,
+        dwExtraInfo: WINDOWS_INJECTED_TAG,
     }
 }
 
@@ -465,7 +465,7 @@ fn rel_mouse(dx: i32, dy: i32) {
         mouseData: 0,
         dwFlags: MOUSEEVENTF_MOVE,
         time: 0,
-        dwExtraInfo: 0,
+        dwExtraInfo: WINDOWS_INJECTED_TAG,
     };
     send_mouse_input(mi);
 }
@@ -507,7 +507,7 @@ fn button_input(button: u32, state: u32) -> Option<MOUSEINPUT> {
         mouseData: mouse_data,
         dwFlags: dw_flags,
         time: 0,
-        dwExtraInfo: 0,
+        dwExtraInfo: WINDOWS_INJECTED_TAG,
     })
 }
 
@@ -593,7 +593,7 @@ fn scroll_input(axis: u8, value: i32) -> Option<MOUSEINPUT> {
         mouseData: value as u32,
         dwFlags: event_type,
         time: 0,
-        dwExtraInfo: 0,
+        dwExtraInfo: WINDOWS_INJECTED_TAG,
     })
 }
 
