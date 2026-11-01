@@ -11,6 +11,7 @@
   </gresource>
   <gresource prefix="/de/feschber/LanMouse/icons">
     <file compressed="true" preprocess="xml-stripblanks">de.feschber.LanMouse.svg</file>
+    <file compressed="true" preprocess="xml-stripblanks" alias="scalable/apps/mousebridge.svg">mousebridge.svg</file>
     <file compressed="true" preprocess="xml-stripblanks" alias="scalable/apps/mousebridge-mark.svg">mousebridge-mark.svg</file>
     <file compressed="true" preprocess="xml-stripblanks" alias="scalable/actions/mb-home-symbolic.svg">icons/scalable/actions/mb-home-symbolic.svg</file>
     <file compressed="true" preprocess="xml-stripblanks" alias="scalable/actions/mb-device-symbolic.svg">icons/scalable/actions/mb-device-symbolic.svg</file>

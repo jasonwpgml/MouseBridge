@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><metadata>© 2026 JSonJh · fd2b31e3ef52</metadata>
+<defs><path id="c" transform="translate(27.84 -0.79) scale(0.62)" d="M18 29.5v19.2c0 1 1.2 1.5 1.9.8l4.6-4.5 3 7c.3.7 1 1 1.7.7l2.3-1c.7-.3 1-1 .7-1.7l-3-6.9h6.4c1 0 1.5-1.2.8-1.9L19.9 28.7c-.7-.7-1.9-.2-1.9.8z"/>
+<mask id="gap" maskUnits="userSpaceOnUse" x="0" y="0" width="64" height="64"><rect width="64" height="64" fill="#fff"/><use href="#c" fill="#000" stroke="#000" stroke-width="4"/></mask></defs>
+<g mask="url(#gap)">
+<rect x="3" y="11" width="40" height="23" rx="3"/>
+<rect x="46" y="7" width="16" height="42" rx="3"/>
+<rect x="8" y="37" width="25" height="18" rx="3"/>
+</g>
+<use href="#c"/>
+</svg>

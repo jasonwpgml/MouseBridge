@@ -6,6 +6,12 @@ fn main() {
         .build()
         .expect("shadow build");
 
+    #[cfg(windows)]
+    winresource::WindowsResource::new()
+        .set_icon("lan-mouse-gtk/resources/mousebridge.ico")
+        .compile()
+        .expect("windows resources");
+
     let unix = cfg!(unix);
     let macos = cfg!(target_os = "macos");
 

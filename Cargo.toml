@@ -83,6 +83,9 @@ notify = "8.2.0"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.148"
 
+[target."cfg(windows)".build-dependencies]
+winresource = "0.1.34"
+
 [features]
 default = [
     "gtk",
@@ -105,7 +108,7 @@ rdp_emulation = ["input-emulation/remote_desktop_portal"]
 
 [package.metadata.bundle]
 name = "MouseBridge"
-icon = ["target/icon.icns", "lan-mouse-gtk/resources/de.feschber.LanMouse.svg"]
+icon = ["target/icon.icns", "lan-mouse-gtk/resources/mousebridge.svg"]
 identifier = "io.github.jasonwpgml.MouseBridge"
 deb_depends = [ "libadwaita-1-0" ]
 resources = ["target/menubar-template.png"]
