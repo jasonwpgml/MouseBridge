@@ -87,7 +87,7 @@ jobs:
     - name: Make icns
       run: scripts/makeicns.sh
     - name: Install cargo bundle
-      run: cargo install cargo-bundle
+      run: cargo install cargo-bundle --locked
     - name: Bundle
       run: |
         cargo bundle --release
@@ -117,7 +117,7 @@ jobs:
     - name: Make icns
       run: scripts/makeicns.sh
     - name: Install cargo bundle
-      run: cargo install cargo-bundle
+      run: cargo install cargo-bundle --locked
     - name: Bundle
       run: |
         cargo bundle --release
