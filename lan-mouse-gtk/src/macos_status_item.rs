@@ -2,7 +2,8 @@
 
 use std::{
     cell::RefCell,
-    ffi::{CStr, CString, c_char, c_double, c_uint, c_void},
+    ffi::{CStr, CString, c_char, c_double, c_int, c_uint, c_void},
+    ptr,
     sync::OnceLock,
 };
 
@@ -81,6 +82,7 @@ pub fn setup(app: &adw::Application, window: &Window) {
             }
 
             install_reopen_handler(delegate);
+            watch_lost_mouse_up();
 
             log::debug!("macos_status_item ready at {status_item:p}");
 
@@ -272,6 +274,56 @@ unsafe fn install_reopen_handler(delegate: Id) {
     );
 }
 
+// AppKit's button tracking loop only ends on a mouse up. If that event never
+// reaches us the main thread stays in the loop, where the reopen event above
+// is not handled, so the window can't be brought back. GLib still runs inside
+// the loop: notice a press whose button is no longer down, and post the mouse
+// up that went missing.
+fn watch_lost_mouse_up() {
+    const LEFT_MOUSE_DOWN: usize = 1;
+    const LEFT_MOUSE_UP: usize = 2;
+    const LEFT_MOUSE_DRAGGED: usize = 6;
+    const COMBINED_SESSION_STATE: c_int = 0;
+    const LEFT_BUTTON: c_uint = 0;
+
+    let mut released_press = ptr::null_mut();
+    glib::timeout_add_seconds_local(1, move || {
+        unsafe {
+            let ns_app = msg_send_id(class(c"NSApplication"), sel(c"sharedApplication"));
+            let event = msg_send_id(ns_app, sel(c"currentEvent"));
+            let in_press = !event.is_null()
+                && matches!(
+                    msg_send_usize(event, sel(c"type")),
+                    LEFT_MOUSE_DOWN | LEFT_MOUSE_DRAGGED
+                );
+            if !in_press || CGEventSourceButtonState(COMBINED_SESSION_STATE, LEFT_BUTTON) {
+                released_press = ptr::null_mut();
+            } else if released_press != event {
+                // may be an up still on its way, so give it until the next tick
+                released_press = event;
+            } else {
+                log::warn!("mouse up never arrived, posting it to end the click");
+                released_press = ptr::null_mut();
+                let up = msg_send_mouse_event(
+                    class(c"NSEvent"),
+                    sel(c"mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:"),
+                    LEFT_MOUSE_UP,
+                    msg_send_point(event, sel(c"locationInWindow")),
+                    msg_send_usize(event, sel(c"modifierFlags")),
+                    msg_send_f64(event, sel(c"timestamp")),
+                    msg_send_usize(event, sel(c"windowNumber")),
+                    ptr::null_mut(),
+                    msg_send_usize(event, sel(c"eventNumber")),
+                    1,
+                    0.0,
+                );
+                msg_send_void_id_bool(ns_app, sel(c"postEvent:atStart:"), up, 1);
+            }
+        }
+        glib::ControlFlow::Continue
+    });
+}
+
 extern "C" fn quit_lan_mouse(_this: Id, _cmd: Sel, _sender: Id) {
     STATUS_ITEM.with(|item| {
         if let Some(app) = item.borrow().as_ref().and_then(|item| item.app.upgrade()) {
@@ -310,6 +362,18 @@ extern "C" {
 #[link(name = "AppKit", kind = "framework")]
 extern "C" {}
 
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventSourceButtonState(state: c_int, button: c_uint) -> bool;
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Point {
+    x: c_double,
+    y: c_double,
+}
+
 #[link(name = "objc")]
 extern "C" {
     #[link_name = "objc_msgSend"]
@@ -330,6 +394,26 @@ extern "C" {
     fn msg_send_id_usize(receiver: Id, selector: Sel, value: usize) -> Id;
     #[link_name = "objc_msgSend"]
     fn msg_send_usize(receiver: Id, selector: Sel) -> usize;
+    #[link_name = "objc_msgSend"]
+    fn msg_send_f64(receiver: Id, selector: Sel) -> c_double;
+    #[link_name = "objc_msgSend"]
+    fn msg_send_point(receiver: Id, selector: Sel) -> Point;
+    #[link_name = "objc_msgSend"]
+    fn msg_send_mouse_event(
+        receiver: Id,
+        selector: Sel,
+        event_type: usize,
+        location: Point,
+        modifier_flags: usize,
+        timestamp: c_double,
+        window_number: usize,
+        context: Id,
+        event_number: usize,
+        click_count: isize,
+        pressure: f32,
+    ) -> Id;
+    #[link_name = "objc_msgSend"]
+    fn msg_send_void_id_bool(receiver: Id, selector: Sel, value: Id, flag: Bool);
     #[link_name = "objc_msgSend"]
     fn msg_send_void_bool(receiver: Id, selector: Sel, value: Bool);
     #[link_name = "objc_msgSend"]
