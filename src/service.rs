@@ -20,7 +20,10 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     io,
     net::{IpAddr, SocketAddr},
-    sync::{Arc, RwLock},
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use thiserror::Error;
@@ -72,6 +75,8 @@ pub struct Service {
     next_trigger_handle: u64,
     /// where this device's keyboard input goes
     keyboard_mode: KeyboardMode,
+    /// connect only over the local network
+    lan_only: Arc<AtomicBool>,
     /// mouse buttons pressed on this device
     local_clicks: tokio::sync::mpsc::UnboundedReceiver<()>,
     /// this device's displays when the layout was last worked out
@@ -101,9 +106,15 @@ impl Service {
 
         let authorized_keys = Arc::new(RwLock::new(config.authorized_fingerprints()));
         // listener + connection
-        let listener =
-            LanMouseListener::new(config.port(), cert.clone(), authorized_keys.clone()).await?;
-        let conn = LanMouseConnection::new(cert.clone(), client_manager.clone());
+        let lan_only = Arc::new(AtomicBool::new(config.lan_only()));
+        let listener = LanMouseListener::new(
+            config.port(),
+            cert.clone(),
+            authorized_keys.clone(),
+            lan_only.clone(),
+        )
+        .await?;
+        let conn = LanMouseConnection::new(cert.clone(), client_manager.clone(), lan_only.clone());
 
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());
@@ -143,6 +154,7 @@ impl Service {
             incoming_conns: Default::default(),
             next_trigger_handle: 0,
             keyboard_mode,
+            lan_only,
             local_clicks,
             local_displays: local_displays(),
         };
@@ -249,6 +261,7 @@ impl Service {
             }
             FrontendRequest::SaveConfiguration => self.save_config(),
             FrontendRequest::SetKeyboardMode(mode) => self.set_keyboard_mode(mode),
+            FrontendRequest::SetLanOnly(lan_only) => self.set_lan_only(lan_only),
             FrontendRequest::UpdatePlacement(handle, placement) => {
                 self.update_placement(handle, placement)
             }
@@ -298,6 +311,8 @@ impl Service {
         let release_bind = self.config.release_bind();
         self.capture.set_release_bind(release_bind);
         self.keyboard_mode = self.config.keyboard_mode();
+        self.lan_only
+            .store(self.config.lan_only(), Ordering::Relaxed);
         self.apply_keyboard_mode();
         let authorized_keys = self.config.authorized_fingerprints();
         self.authorized_keys
@@ -465,6 +480,9 @@ impl Service {
         let keys = self.authorized_keys.read().expect("lock").clone();
         self.notify_frontend(FrontendEvent::AuthorizedUpdated(keys));
         self.notify_frontend(FrontendEvent::KeyboardMode(self.keyboard_mode.clone()));
+        self.notify_frontend(FrontendEvent::LanOnly(
+            self.lan_only.load(Ordering::Relaxed),
+        ));
         self.notify_frontend(FrontendEvent::LocalLayout {
             displays: local_displays(),
             placement: self.config.placement(),
@@ -640,6 +658,16 @@ impl Service {
             self.apply_keyboard_mode();
         }
         self.broadcast_client(handle);
+    }
+
+    fn set_lan_only(&mut self, lan_only: bool) {
+        log::info!("local network only: {lan_only}");
+        self.lan_only.store(lan_only, Ordering::Relaxed);
+        self.config.set_lan_only(lan_only);
+        if let Err(e) = self.config.write_back() {
+            log::warn!("failed to write config: {e}");
+        }
+        self.notify_frontend(FrontendEvent::LanOnly(lan_only));
     }
 
     fn set_keyboard_mode(&mut self, mode: KeyboardMode) {

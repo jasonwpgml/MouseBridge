@@ -268,6 +268,8 @@ pub enum FrontendEvent {
     ConnectionAttempt { fingerprint: String },
     /// where this device's keyboard input goes
     KeyboardMode(KeyboardMode),
+    /// whether devices connect only over the local network
+    LanOnly(bool),
     /// this device's displays and where it sits on the canvas
     LocalLayout {
         displays: Vec<DisplayInfo>,
@@ -315,6 +317,8 @@ pub enum FrontendRequest {
     SaveConfiguration,
     /// choose where this device's keyboard input goes, saved to the config
     SetKeyboardMode(KeyboardMode),
+    /// connect only over the local network or not, saved to the config
+    SetLanOnly(bool),
     /// place a client on the canvas, or take it off
     UpdatePlacement(ClientHandle, Option<Placement>),
     /// place this device on the canvas

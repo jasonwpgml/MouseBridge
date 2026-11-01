@@ -9,7 +9,10 @@ use std::{
     io,
     net::{IpAddr, SocketAddr},
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use thiserror::Error;
@@ -47,7 +50,7 @@ async fn connect(
     addr: SocketAddr,
     cert: Certificate,
 ) -> Result<(Arc<dyn Conn + Sync + Send>, SocketAddr), (SocketAddr, LanMouseConnectionError)> {
-    log::info!("connecting to {addr} ...");
+    log::debug!("connecting to {addr} ...");
     let conn = Arc::new(
         UdpSocket::bind("0.0.0.0:0")
             .await
@@ -75,8 +78,12 @@ async fn connect(
 /// (a VPN's, say) join in
 const LAN_HEAD_START: Duration = Duration::from_millis(500);
 
+/// how often clients that are not connected are tried again, so they connect
+/// by themselves once they can be reached
+const RECONNECT_INTERVAL: Duration = Duration::from_secs(15);
+
 /// whether the address is on the local network
-fn is_lan(addr: &SocketAddr) -> bool {
+pub(crate) fn is_lan(addr: &SocketAddr) -> bool {
     match addr.ip() {
         IpAddr::V4(ip) => ip.is_private() || ip.is_link_local(),
         // unique local addresses are left out: VPNs like Tailscale use them
@@ -134,7 +141,7 @@ async fn connect_any(
             Some(r) = joinset.join_next() => match r.expect("join error") {
                 Ok(conn) => return Ok(conn),
                 Err((a, e)) => {
-                    log::warn!("failed to connect to {a}: `{e}`");
+                    log::debug!("failed to connect to {a}: `{e}`");
                     // every local address failed: no need to wait any longer
                     if joinset.is_empty() && !others_started {
                         head_start.as_mut().reset(tokio::time::Instant::now());
@@ -154,12 +161,17 @@ pub(crate) struct LanMouseConnection {
     recv_rx: Receiver<(ClientHandle, ProtoEvent)>,
     recv_tx: Sender<(ClientHandle, ProtoEvent)>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
+    lan_only: Arc<AtomicBool>,
 }
 
 impl LanMouseConnection {
-    pub(crate) fn new(cert: Certificate, client_manager: ClientManager) -> Self {
+    pub(crate) fn new(
+        cert: Certificate,
+        client_manager: ClientManager,
+        lan_only: Arc<AtomicBool>,
+    ) -> Self {
         let (recv_tx, recv_rx) = channel();
-        Self {
+        let connection = Self {
             cert,
             client_manager,
             conns: Default::default(),
@@ -167,7 +179,18 @@ impl LanMouseConnection {
             recv_rx,
             recv_tx,
             ping_response: Default::default(),
-        }
+            lan_only,
+        };
+        spawn_local(reconnect_loop(
+            connection.client_manager.clone(),
+            connection.cert.clone(),
+            connection.conns.clone(),
+            connection.connecting.clone(),
+            connection.recv_tx.clone(),
+            connection.ping_response.clone(),
+            connection.lan_only.clone(),
+        ));
+        connection
     }
 
     pub(crate) async fn recv(&mut self) -> (ClientHandle, ProtoEvent) {
@@ -215,6 +238,7 @@ impl LanMouseConnection {
                 self.connecting.clone(),
                 self.recv_tx.clone(),
                 self.ping_response.clone(),
+                self.lan_only.clone(),
             ));
         }
         Err(LanMouseConnectionError::NotConnected)
@@ -233,6 +257,41 @@ impl LanMouseConnection {
     }
 }
 
+/// Connects active clients that are not connected, whether they were lost or
+/// the network has changed.
+async fn reconnect_loop(
+    client_manager: ClientManager,
+    cert: Certificate,
+    conns: Rc<Mutex<HashMap<SocketAddr, Arc<dyn Conn + Send + Sync>>>>,
+    connecting: Rc<Mutex<HashSet<ClientHandle>>>,
+    tx: Sender<(ClientHandle, ProtoEvent)>,
+    ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
+    lan_only: Arc<AtomicBool>,
+) {
+    let mut interval = tokio::time::interval(RECONNECT_INTERVAL);
+    loop {
+        interval.tick().await;
+        for (handle, _, state) in client_manager.get_client_states() {
+            if !state.active || state.active_addr.is_some() {
+                continue;
+            }
+            if connecting.lock().await.insert(handle) {
+                spawn_local(connect_to_handle(
+                    client_manager.clone(),
+                    cert.clone(),
+                    handle,
+                    conns.clone(),
+                    connecting.clone(),
+                    tx.clone(),
+                    ping_response.clone(),
+                    lan_only.clone(),
+                ));
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn connect_to_handle(
     client_manager: ClientManager,
     cert: Certificate,
@@ -241,16 +300,18 @@ async fn connect_to_handle(
     connecting: Rc<Mutex<HashSet<ClientHandle>>>,
     tx: Sender<(ClientHandle, ProtoEvent)>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
+    lan_only: Arc<AtomicBool>,
 ) -> Result<(), LanMouseConnectionError> {
-    log::info!("client {handle} connecting ...");
+    log::debug!("client {handle} connecting ...");
     // sending did not work, figure out active conn.
     if let Some(addrs) = client_manager.get_ips(handle) {
         let port = client_manager.get_port(handle).unwrap_or(DEFAULT_PORT);
         let addrs = addrs
             .into_iter()
             .map(|a| SocketAddr::new(a, port))
+            .filter(|a| !lan_only.load(Ordering::Relaxed) || is_lan(a))
             .collect::<Vec<_>>();
-        log::info!("client ({handle}) connecting ... (ips: {addrs:?})");
+        log::debug!("client ({handle}) connecting ... (ips: {addrs:?})");
         let res = connect_any(&addrs, cert).await;
         let (conn, addr) = match res {
             Ok(c) => c,
@@ -284,7 +345,12 @@ async fn connect_to_handle(
         }
 
         // poll connection for active
-        spawn_local(ping_pong(addr, conn.clone(), ping_response.clone()));
+        spawn_local(ping_pong(
+            addr,
+            conn.clone(),
+            ping_response.clone(),
+            lan_only,
+        ));
 
         // receiver
         spawn_local(receive_loop(
@@ -306,8 +372,15 @@ async fn ping_pong(
     addr: SocketAddr,
     conn: Arc<dyn Conn + Send + Sync>,
     ping_response: Rc<RefCell<HashSet<SocketAddr>>>,
+    lan_only: Arc<AtomicBool>,
 ) {
     loop {
+        if lan_only.load(Ordering::Relaxed) && !is_lan(&addr) {
+            log::info!("{addr} is not on the local network, closing connection");
+            let _ = conn.close().await;
+            return;
+        }
+
         let (buf, len) = ProtoEvent::Ping.into();
 
         // send 4 pings, at least one must be answered

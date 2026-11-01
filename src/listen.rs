@@ -6,7 +6,10 @@ use std::{
     collections::{HashMap, VecDeque},
     net::SocketAddr,
     rc::Rc,
-    sync::{Arc, Mutex, RwLock},
+    sync::{
+        Arc, Mutex, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use thiserror::Error;
@@ -22,7 +25,7 @@ use webrtc_dtls::{
 };
 use webrtc_util::{Conn, Error, conn::Listener};
 
-use crate::crypto;
+use crate::{connect::is_lan, crypto};
 
 #[derive(Error, Debug)]
 pub enum ListenerCreationError {
@@ -55,6 +58,7 @@ pub(crate) struct LanMouseListener {
     conns: Rc<AsyncMutex<Vec<(SocketAddr, ArcConn)>>>,
     request_port_change: Sender<u16>,
     port_changed: Receiver<Result<u16, ListenerCreationError>>,
+    lan_only: Arc<AtomicBool>,
 }
 
 type VerifyPeerCertificateFn = Arc<
@@ -68,6 +72,7 @@ impl LanMouseListener {
         port: u16,
         cert: Certificate,
         authorized_keys: Arc<RwLock<HashMap<String, String>>>,
+        lan_only: Arc<AtomicBool>,
     ) -> Result<Self, ListenerCreationError> {
         let (listen_tx, listen_rx) = channel();
         let (request_port_change, mut request_port_change_rx) = channel();
@@ -119,6 +124,7 @@ impl LanMouseListener {
         let listen_task: JoinHandle<()> = {
             let listen_tx = listen_tx.clone();
             let connection_attempts = connection_attempts.clone();
+            let lan_only = lan_only.clone();
             spawn_local(async move {
                 loop {
                     let sleep = tokio::time::sleep(Duration::from_secs(2));
@@ -127,6 +133,11 @@ impl LanMouseListener {
                         _ = sleep => continue,
                         c = listener.accept() => match c {
                             Ok((conn, addr)) => {
+                                if lan_only.load(Ordering::Relaxed) && !is_lan(&addr) {
+                                    log::debug!("refusing {addr}: not on the local network");
+                                    let _ = conn.close().await;
+                                    continue;
+                                }
                                 log::info!("dtls client connected, ip: {addr}");
                                 let mut conns = conns_clone.lock().await;
                                 conns.push((addr, conn.clone()));
@@ -183,6 +194,7 @@ impl LanMouseListener {
             listen_task,
             port_changed,
             request_port_change,
+            lan_only,
         })
     }
 
@@ -201,6 +213,19 @@ impl LanMouseListener {
             let _ = conn.close().await;
         }
         self.listen_tx.close();
+    }
+
+    /// closes connections from outside the local network, if those are not
+    /// allowed
+    pub(crate) async fn close_outside_lan(&self) {
+        if !self.lan_only.load(Ordering::Relaxed) {
+            return;
+        }
+        let conns = self.conns.lock().await;
+        for (addr, conn) in conns.iter().filter(|(addr, _)| !is_lan(addr)) {
+            log::info!("{addr} is not on the local network, closing connection");
+            let _ = conn.close().await;
+        }
     }
 
     /// sends `event` to every peer connected to us

@@ -108,6 +108,8 @@ struct ConfigToml {
     cert_path: Option<PathBuf>,
     /// show remote pointers as cursors of their own (Windows only)
     second_cursor: Option<bool>,
+    /// connect only over the local network, never through a VPN (default)
+    lan_only: Option<bool>,
     /// where keyboard input goes: "follow" (default), "local", "click" or a
     /// hostname
     keyboard: Option<String>,
@@ -570,6 +572,17 @@ impl Config {
     }
 
     /// where this device's keyboard input goes
+    pub fn lan_only(&self) -> bool {
+        self.config_toml
+            .as_ref()
+            .and_then(|c| c.lan_only)
+            .unwrap_or(true)
+    }
+
+    pub fn set_lan_only(&mut self, lan_only: bool) {
+        self.config_toml.get_or_insert_default().lan_only = Some(lan_only);
+    }
+
     pub fn keyboard_mode(&self) -> KeyboardMode {
         parse_keyboard_mode(
             self.config_toml
@@ -754,6 +767,13 @@ placement = { x = 0, y = 0, size = 80 }
         let doc = written.parse::<DocumentMut>().unwrap();
         let reread: ConfigToml = toml_edit::de::from_document(doc).unwrap();
         assert_eq!(reread, config);
+    }
+
+    #[test]
+    fn local_network_only_can_be_turned_off() {
+        let parse = |toml: &str| toml::from_str::<ConfigToml>(toml).unwrap().lan_only;
+        assert_eq!(parse(""), None);
+        assert_eq!(parse("lan_only = false"), Some(false));
     }
 
     #[test]

@@ -315,6 +315,7 @@ fn build_ui(app: &Application) {
                         window.show_toast(format!("{addr} disconnected").as_str());
                     }
                     FrontendEvent::KeyboardMode(_) => {}
+                    FrontendEvent::LanOnly(lan_only) => window.update_lan_only(lan_only),
                     FrontendEvent::LocalLayout {
                         displays,
                         placement,

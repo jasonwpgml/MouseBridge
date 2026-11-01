@@ -314,6 +314,10 @@ impl Window {
         );
     }
 
+    pub(crate) fn update_lan_only(&self, lan_only: bool) {
+        self.imp().lan_only_switch.set_active(lan_only);
+    }
+
     fn setup_icon(&self) {
         self.set_icon_name(Some("mousebridge"));
     }

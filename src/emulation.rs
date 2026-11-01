@@ -260,6 +260,7 @@ impl ListenTask {
                     EmulationRequest::Terminate => break,
                 },
                 _ = interval.tick() => {
+                    self.listener.close_outside_lan().await;
                     last_response.retain(|&addr,instant| {
                         if instant.elapsed() > Duration::from_secs(1) {
                             log::warn!("releasing keys: {addr} not responding!");

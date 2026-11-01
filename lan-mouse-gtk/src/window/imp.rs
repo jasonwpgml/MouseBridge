@@ -4,9 +4,9 @@ use adw::subclass::prelude::*;
 use adw::{ActionRow, PreferencesGroup, ToastOverlay, prelude::*};
 use glib::subclass::InitializingObject;
 use gtk::glib::clone;
-use gtk::{Button, CompositeTemplate, Entry, Image, Label, ListBox, gdk, gio, glib};
+use gtk::{Button, CompositeTemplate, Entry, Image, Label, ListBox, Switch, gdk, gio, glib};
 
-use lan_mouse_ipc::{DEFAULT_PORT, FrontendRequestWriter};
+use lan_mouse_ipc::{DEFAULT_PORT, FrontendRequest, FrontendRequestWriter};
 
 use crate::authorization_window::AuthorizationWindow;
 use crate::layout_editor::LayoutEditor;
@@ -28,6 +28,8 @@ pub struct Window {
     pub client_placeholder: TemplateChild<ActionRow>,
     #[template_child]
     pub port_entry: TemplateChild<Entry>,
+    #[template_child]
+    pub lan_only_switch: TemplateChild<Switch>,
     #[template_child]
     pub hostname_copy_icon: TemplateChild<Image>,
     #[template_child]
@@ -128,6 +130,12 @@ impl Window {
                 button.remove_css_class("success");
             }
         ));
+    }
+
+    #[template_callback]
+    fn handle_lan_only(&self, _switch: &Switch, _pspec: &glib::ParamSpec) {
+        let lan_only = self.lan_only_switch.is_active();
+        self.obj().request(FrontendRequest::SetLanOnly(lan_only));
     }
 
     #[template_callback]
