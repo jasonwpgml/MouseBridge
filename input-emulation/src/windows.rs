@@ -608,7 +608,7 @@ fn key_event(key: u32, state: u8) {
                 Default::default()
             },
             time: 0,
-            dwExtraInfo: 0,
+            dwExtraInfo: WINDOWS_INJECTED_TAG,
         };
         send_keyboard_input(ki);
         return;
@@ -631,7 +631,7 @@ fn key_event(key: u32, state: u8) {
         wScan: scancode,
         dwFlags: flags,
         time: 0,
-        dwExtraInfo: 0,
+        dwExtraInfo: WINDOWS_INJECTED_TAG,
     };
     send_keyboard_input(ki);
 }

@@ -19,7 +19,7 @@ use windows::core::{PCWSTR, w};
 
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DispatchMessageW, EDD_GET_DEVICE_INTERFACE_NAME, GetMessageW,
-    HOOKPROC, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT,
+    HOOKPROC, KBDLLHOOKSTRUCT, LLKHF_EXTENDED, LLKHF_INJECTED, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT,
     PostThreadMessageW, RegisterClassW, SetWindowsHookExW, TranslateMessage, WH_KEYBOARD_LL,
     WH_MOUSE_LL, WINDOW_STYLE, WM_DISPLAYCHANGE, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEHWHEEL, WM_MOUSEMOVE, WM_MOUSEWHEEL,
@@ -321,9 +321,15 @@ fn check_client_activation(wparam: WPARAM, lparam: LPARAM) -> bool {
     ret
 }
 
+fn is_button_down(wparam: WPARAM) -> bool {
+    [WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_MBUTTONDOWN]
+        .iter()
+        .any(|&m| wparam.0 == m as usize)
+}
+
 /// Lets input another program injected through, such as a remote desktop
 /// host. Its pointer jumps anywhere on screen, so it must neither cross a
-/// barrier nor reach a client as motion.
+/// barrier nor reach a client as motion, and its clicks count as local.
 fn pass_foreign_input(wparam: WPARAM, lparam: LPARAM) -> bool {
     let mouse_low_level: MSLLHOOKSTRUCT = unsafe { *(lparam.0 as *const MSLLHOOKSTRUCT) };
     let foreign = mouse_low_level.flags & LLMHF_INJECTED != 0
@@ -335,6 +341,8 @@ fn pass_foreign_input(wparam: WPARAM, lparam: LPARAM) -> bool {
         if ACTIVE_CLIENT.get().is_some() {
             ENTRY_POINT.replace(pos);
         }
+    } else if foreign && ACTIVE_CLIENT.get().is_none() && is_button_down(wparam) {
+        local_click();
     }
     foreign
 }
@@ -348,10 +356,7 @@ unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM)
 
     /* no client was active */
     if !active {
-        if [WM_LBUTTONDOWN, WM_RBUTTONDOWN, WM_MBUTTONDOWN]
-            .iter()
-            .any(|&m| wparam.0 == m as usize)
-        {
+        if is_button_down(wparam) {
             local_click();
         }
         return CallNextHookEx(None, ncode, wparam, lparam);
@@ -377,6 +382,12 @@ unsafe extern "system" fn mouse_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM)
 }
 
 unsafe extern "system" fn kybrd_proc(ncode: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    /* keys another program injected, such as a remote desktop host, stay here */
+    let key: KBDLLHOOKSTRUCT = unsafe { *(lparam.0 as *const KBDLLHOOKSTRUCT) };
+    if key.flags.contains(LLKHF_INJECTED) && key.dwExtraInfo != WINDOWS_INJECTED_TAG {
+        return CallNextHookEx(None, ncode, wparam, lparam);
+    }
+
     /* the client receiving keys: the active one or the one keys are locked to */
     let client = match keyboard_capture() {
         KeyboardCapture::FollowPointer => ACTIVE_CLIENT.get(),

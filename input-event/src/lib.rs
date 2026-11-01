@@ -13,7 +13,7 @@ pub const BTN_MIDDLE: u32 = 0x112;
 pub const BTN_BACK: u32 = 0x113;
 pub const BTN_FORWARD: u32 = 0x114;
 
-/// Marks mouse input this app injects on Windows, so capture can tell it from
+/// Marks mouse and keyboard input this app injects on Windows, so capture can tell it from
 /// input injected by other software, such as a remote desktop host.
 pub const WINDOWS_INJECTED_TAG: usize = 0x4D42_5247;
 
