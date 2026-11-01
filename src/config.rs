@@ -113,6 +113,8 @@ struct ConfigToml {
     keyboard: Option<String>,
     /// where this device sits on the canvas the devices are arranged on
     placement: Option<Placement>,
+    /// the arrangement was made on this device, which tells the others
+    arranges_layout: Option<bool>,
     clients: Option<Vec<TomlClient>>,
     authorized_fingerprints: Option<HashMap<String, String>>,
     /// per-client key remapping, keyed by client hostname
@@ -584,6 +586,18 @@ impl Config {
             .as_ref()
             .and_then(|c| c.placement)
             .unwrap_or_default()
+    }
+
+    /// whether the arrangement was made on this device
+    pub fn arranges_layout(&self) -> bool {
+        self.config_toml
+            .as_ref()
+            .and_then(|c| c.arranges_layout)
+            .unwrap_or(false)
+    }
+
+    pub fn set_arranges_layout(&mut self, arranges: bool) {
+        self.config_toml.get_or_insert_default().arranges_layout = arranges.then_some(true);
     }
 
     pub fn set_placement(&mut self, placement: Placement) {

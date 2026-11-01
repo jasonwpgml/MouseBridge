@@ -11,6 +11,12 @@ use lan_mouse_ipc::{DisplayInfo, Placement, Position};
 /// Displays further apart than this on the canvas do not touch.
 const TOUCH_TOLERANCE: i32 = 2;
 
+/// whether a placement a peer sent makes sense
+pub(crate) fn plausible(p: Placement) -> bool {
+    const REACH: i32 = 1_000_000;
+    (20..=400).contains(&p.size) && p.x.abs() <= REACH && p.y.abs() <= REACH
+}
+
 /// a device on the canvas
 pub(crate) struct Device<'a> {
     pub name: &'a str,
@@ -329,6 +335,52 @@ mod tests {
         assert_eq!(portal.entry_point((0, 200)), (1535, 600));
         // below the stretch the pointer is held at its end
         assert_eq!(portal.entry_point((0, 900)), (1535, 862));
+    }
+
+    #[test]
+    fn both_devices_see_the_same_portal() {
+        let (mac, desktop, _) = desk();
+        let mac_at = Placement {
+            x: 347,
+            y: 1080,
+            size: 72,
+        };
+        let device = |name, displays, placement| Device {
+            name,
+            displays,
+            placement,
+        };
+        let from_mac = portals(
+            &device("mac", &mac, mac_at),
+            &[device("desktop", &desktop, at(0, 0))],
+        );
+        let from_desktop = portals(
+            &device("desktop", &desktop, at(0, 0)),
+            &[device("mac", &mac, mac_at)],
+        );
+        assert_eq!(from_mac[0].side, Position::Top);
+        assert_eq!(from_desktop[0].side, Position::Bottom);
+        // up from the Mac, then back down from where it landed: same place
+        let there = from_mac[0].entry_point((500, 0));
+        assert_eq!(there.1, 1079);
+        let back = from_desktop[0].entry_point(there);
+        assert_eq!(back.1, 0);
+        assert!((back.0 - 500).abs() <= 2, "{back:?}");
+    }
+
+    #[test]
+    fn nonsense_placements_are_refused() {
+        assert!(plausible(at(-5, 1080)));
+        assert!(!plausible(Placement {
+            x: 0,
+            y: 0,
+            size: 0
+        }));
+        assert!(!plausible(Placement {
+            x: i32::MAX,
+            y: 0,
+            size: 100
+        }));
     }
 
     #[test]

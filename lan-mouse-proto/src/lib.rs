@@ -92,6 +92,16 @@ pub enum ProtoEvent {
     /// A mouse button was pressed on the sender while it was not sending
     /// input anywhere, so it now has the window in use.
     Clicked,
+    /// Where the sender arranged the two devices on the canvas: the receiver
+    /// (`you_*`) and the sender (`me_*`), each with its size in percent.
+    Arrangement {
+        you_x: i32,
+        you_y: i32,
+        you_size: u16,
+        me_x: i32,
+        me_y: i32,
+        me_size: u16,
+    },
 }
 
 impl Display for ProtoEvent {
@@ -128,6 +138,17 @@ impl Display for ProtoEvent {
             ),
             ProtoEvent::EnterAt { x, y } => write!(f, "EnterAt({x},{y})"),
             ProtoEvent::Clicked => write!(f, "Clicked"),
+            ProtoEvent::Arrangement {
+                you_x,
+                you_y,
+                you_size,
+                me_x,
+                me_y,
+                me_size,
+            } => write!(
+                f,
+                "Arrangement(you {you_x},{you_y} {you_size}%, me {me_x},{me_y} {me_size}%)"
+            ),
         }
     }
 }
@@ -150,6 +171,7 @@ pub enum EventType {
     Display,
     EnterAt,
     Clicked,
+    Arrangement,
 }
 
 impl ProtoEvent {
@@ -176,6 +198,7 @@ impl ProtoEvent {
             ProtoEvent::Display { .. } => EventType::Display,
             ProtoEvent::EnterAt { .. } => EventType::EnterAt,
             ProtoEvent::Clicked => EventType::Clicked,
+            ProtoEvent::Arrangement { .. } => EventType::Arrangement,
         }
     }
 }
@@ -251,6 +274,14 @@ impl TryFrom<[u8; MAX_EVENT_SIZE]> for ProtoEvent {
                 y: decode_i32(&mut buf)?,
             }),
             EventType::Clicked => Ok(Self::Clicked),
+            EventType::Arrangement => Ok(Self::Arrangement {
+                you_x: decode_i32(&mut buf)?,
+                you_y: decode_i32(&mut buf)?,
+                you_size: decode_u16(&mut buf)?,
+                me_x: decode_i32(&mut buf)?,
+                me_y: decode_i32(&mut buf)?,
+                me_size: decode_u16(&mut buf)?,
+            }),
         }
     }
 }
@@ -342,6 +373,21 @@ impl From<ProtoEvent> for ([u8; MAX_EVENT_SIZE], usize) {
                     encode_i32(buf, len, y);
                 }
                 ProtoEvent::Clicked => {}
+                ProtoEvent::Arrangement {
+                    you_x,
+                    you_y,
+                    you_size,
+                    me_x,
+                    me_y,
+                    me_size,
+                } => {
+                    encode_i32(buf, len, you_x);
+                    encode_i32(buf, len, you_y);
+                    encode_u16(buf, len, you_size);
+                    encode_i32(buf, len, me_x);
+                    encode_i32(buf, len, me_y);
+                    encode_u16(buf, len, me_size);
+                }
             }
         }
         (buf, len)
@@ -430,6 +476,35 @@ mod tests {
             panic!("not an entry point");
         };
         assert_eq!((x, y), (-300, 1079));
+    }
+
+    #[test]
+    fn arrangement_round_trips_within_one_event() {
+        let (buf, len) = ProtoEvent::Arrangement {
+            you_x: -5,
+            you_y: 0,
+            you_size: 100,
+            me_x: 330,
+            me_y: 1080,
+            me_size: 60,
+        }
+        .into();
+        assert_eq!(len, MAX_EVENT_SIZE);
+        let ProtoEvent::Arrangement {
+            you_x,
+            you_y,
+            you_size,
+            me_x,
+            me_y,
+            me_size,
+        } = ProtoEvent::try_from(buf).unwrap()
+        else {
+            panic!("not an arrangement");
+        };
+        assert_eq!(
+            (you_x, you_y, you_size, me_x, me_y, me_size),
+            (-5, 0, 100, 330, 1080, 60)
+        );
     }
 
     #[test]

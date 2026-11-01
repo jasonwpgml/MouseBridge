@@ -62,6 +62,7 @@ enum ProducerEvent {
     Destroy(Position),
     Grab(Position),
     SetGates(Position, Option<Vec<Gate>>),
+    Warp((i32, i32)),
     EventTapDisabled,
     DisplayReconfigured,
 }
@@ -181,6 +182,11 @@ impl InputCaptureState {
                     self.hide_cursor()?;
                     self.current_pos = Some(pos);
                 }
+            }
+            ProducerEvent::Warp((x, y)) => {
+                // points are this backend's coordinates already
+                CGDisplay::warp_mouse_cursor_position(CGPoint::new(x as f64, y as f64))
+                    .map_err(CaptureError::WarpCursor)?;
             }
             ProducerEvent::Create(p) => {
                 self.active_clients.insert(p);
@@ -871,6 +877,13 @@ impl Capture for MacOSInputCapture {
             let _ = notify_tx.send(ProducerEvent::Release).await;
         });
         Ok(())
+    }
+
+    fn warp(&mut self, point: (i32, i32)) {
+        let notify_tx = self.notify_tx.clone();
+        tokio::task::spawn_local(async move {
+            let _ = notify_tx.send(ProducerEvent::Warp(point)).await;
+        });
     }
 
     fn set_gates(&mut self, pos: Position, gates: Option<Vec<Gate>>) {

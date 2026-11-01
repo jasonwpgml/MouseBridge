@@ -40,8 +40,8 @@ impl Pointer {
     /// Moves the pointer by the given delta, keeping it on the displays.
     ///
     /// Returns the edge it was pushed against when the move would leave the
-    /// displays, but only on the first push: holding it against the edge
-    /// reports nothing more until it moved away again.
+    /// displays, on the first push and whenever it slides along the edge:
+    /// holding it still against the edge reports nothing more.
     pub(super) fn move_by(&mut self, dx: f64, dy: f64, displays: &[Rect]) -> Option<Edge> {
         let (x, y) = (self.x + dx, self.y + dy);
         let target = (x.floor() as i32, y.floor() as i32);
@@ -66,7 +66,7 @@ impl Pointer {
         };
         self.x = x.clamp(display.left as f64, (display.right - 1) as f64);
         self.y = y.clamp(display.top as f64, (display.bottom - 1) as f64);
-        if self.pushing == Some(edge) {
+        if self.pushing == Some(edge) && self.position() == current {
             return None;
         }
         self.pushing = Some(edge);
@@ -121,6 +121,14 @@ mod tests {
         assert_eq!(pointer.move_by(0.0, 30.0, &displays()), None);
         assert_eq!(pointer.move_by(0.0, -10.0, &displays()), None);
         assert_eq!(pointer.move_by(0.0, 30.0, &displays()), Some(Edge::Bottom));
+    }
+
+    #[test]
+    fn sliding_along_an_edge_is_reported() {
+        let mut pointer = Pointer::new((960, 1079));
+        assert_eq!(pointer.move_by(0.0, 30.0, &displays()), Some(Edge::Bottom));
+        assert_eq!(pointer.move_by(40.0, 30.0, &displays()), Some(Edge::Bottom));
+        assert_eq!(pointer.position(), (1000, 1079));
     }
 
     #[test]

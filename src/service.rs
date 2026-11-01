@@ -15,6 +15,7 @@ use lan_mouse_ipc::{
     AsyncFrontendListener, ClientHandle, DisplayInfo, FrontendEvent, FrontendRequest, IpcError,
     IpcListenerCreationError, KeyboardMode, Placement, Position, Status,
 };
+use lan_mouse_proto::ProtoEvent;
 use log;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -74,6 +75,8 @@ pub struct Service {
     keyboard_mode: KeyboardMode,
     /// mouse buttons pressed on this device
     local_clicks: tokio::sync::mpsc::UnboundedReceiver<()>,
+    /// the ways the pointer reaches each placed client
+    passages: HashMap<ClientHandle, Vec<Passage>>,
     /// this device's displays when the layout was last worked out
     local_displays: Vec<DisplayInfo>,
 }
@@ -144,6 +147,7 @@ impl Service {
             next_trigger_handle: 0,
             keyboard_mode,
             local_clicks,
+            passages: Default::default(),
             local_displays: local_displays(),
         };
         Ok(service)
@@ -164,6 +168,8 @@ impl Service {
         self.update_layout();
 
         let mut display_check = tokio::time::interval(DISPLAY_CHECK_INTERVAL);
+        // for a device that was away or missed the arrangement
+        let mut resend_arrangement = tokio::time::interval(ARRANGEMENT_RESEND);
         loop {
             tokio::select! {
                 request = self.frontend_listener.next() => self.handle_frontend_request(request),
@@ -174,10 +180,12 @@ impl Service {
                 _ = self.config.changed() => self.handle_config_change(),
                 Some(()) = self.local_clicks.recv() => self.capture.local_click(),
                 _ = self.client_manager.displays_changed() => {
+                    self.send_arrangement();
                     self.update_layout();
                     self.enumerate();
                 }
                 _ = display_check.tick() => self.check_local_displays(),
+                _ = resend_arrangement.tick() => self.send_arrangement(),
                 r = signal::ctrl_c() => break r.expect("failed to wait for CTRL+C"),
             }
         }
@@ -358,7 +366,26 @@ impl Service {
                 self.notify_frontend(FrontendEvent::EmulationStatus(self.emulation_status));
             }
             EmulationEvent::ReleaseNotify => self.capture.release(),
-            EmulationEvent::CrossedEdge { addr, pos } => {
+            EmulationEvent::PeerArrangement { addr, you, me } => {
+                self.apply_arrangement(addr, you, me)
+            }
+            EmulationEvent::CrossedEdge { addr, pos, point } => {
+                // A placed device takes it back only through a portal, at the
+                // matching point. Without any portal it falls through to the
+                // edge it came from, so the cursor can never get stuck here.
+                let passages = self
+                    .client_manager
+                    .get_client(addr)
+                    .and_then(|h| self.passages.get(&h))
+                    .filter(|p| !p.is_empty());
+                if let Some(passages) = passages {
+                    let side = to_capture_pos(pos);
+                    if let Some(passage) = passages.iter().find(|p| p.gate.contains(side, point)) {
+                        self.emulation
+                            .send_leave_event_at(addr, Some(passage.entry_point(point)));
+                    }
+                    return;
+                }
                 // the second cursor moved back towards the device it came from
                 let towards_device = self
                     .incoming_conn_info
@@ -711,19 +738,77 @@ impl Service {
     fn update_placement(&mut self, handle: ClientHandle, placement: Option<Placement>) {
         log::info!("placement of client {handle}: {placement:?}");
         self.client_manager.set_placement(handle, placement);
+        self.config.set_arranges_layout(true);
         self.save_config();
         self.update_layout();
         self.broadcast_client(handle);
+        self.send_arrangement();
     }
 
     fn update_local_placement(&mut self, placement: Placement) {
         log::info!("placement of this device: {placement:?}");
         self.config.set_placement(placement);
+        self.config.set_arranges_layout(true);
         self.save_config();
         self.update_layout();
         self.notify_frontend(FrontendEvent::LocalLayout {
             displays: local_displays(),
             placement,
+        });
+        self.send_arrangement();
+    }
+
+    /// tells the placed clients where they and this device are, if the
+    /// arrangement was made here
+    fn send_arrangement(&self) {
+        if !self.config.arranges_layout() {
+            return;
+        }
+        let me = self.config.placement();
+        for (handle, config, state) in self.client_manager.get_client_states() {
+            let Some(you) = config.placement.filter(|_| state.active) else {
+                continue;
+            };
+            self.capture.send_event(
+                handle,
+                ProtoEvent::Arrangement {
+                    you_x: you.x,
+                    you_y: you.y,
+                    you_size: you.size,
+                    me_x: me.x,
+                    me_y: me.y,
+                    me_size: me.size,
+                },
+            );
+        }
+    }
+
+    /// takes over an arrangement made on the device at `addr`
+    fn apply_arrangement(&mut self, addr: SocketAddr, you: Placement, me: Placement) {
+        if !layout::plausible(you) || !layout::plausible(me) {
+            log::warn!("ignoring arrangement from {addr}: this device {you:?}, it {me:?}");
+            return;
+        }
+        let Some(handle) = self.client_manager.get_client(addr) else {
+            log::info!("ignoring arrangement from {addr}, which is no active client");
+            return;
+        };
+        if self.config.placement() == you
+            && self.client_manager.get_placement(handle) == Some(me)
+            && !self.config.arranges_layout()
+        {
+            return;
+        }
+        log::info!("arrangement from {addr}: this device {you:?}, client {handle} {me:?}");
+        self.config.set_placement(you);
+        self.config.set_arranges_layout(false);
+        self.client_manager.set_placement(handle, Some(me));
+        self.save_config();
+        self.update_layout();
+        self.broadcast_client(handle);
+        self.notify_frontend(FrontendEvent::LocalLayout {
+            displays: local_displays(),
+            placement: you,
         });
     }
 
@@ -777,6 +862,7 @@ impl Service {
         let portals = layout::portals(&local, &placed);
 
         let mut moved = Vec::new();
+        self.passages.clear();
         for (name, device) in placed.iter().map(|d| (d.name, d)) {
             let handle: ClientHandle = name.parse().expect("handle");
             let passages = portals
@@ -808,7 +894,8 @@ impl Service {
             if let Some(side) = layout::main_side(&portals, name) {
                 moved.push((handle, side));
             }
-            self.capture.set_passages(handle, Some(passages));
+            self.capture.set_passages(handle, Some(passages.clone()));
+            self.passages.insert(handle, passages);
         }
         for (handle, ..) in clients
             .iter()
@@ -886,6 +973,9 @@ impl std::fmt::Display for HookKind {
 
 /// how often to look for changed displays, which nothing reports to the
 /// service
+/// how often the arranging device repeats the arrangement
+const ARRANGEMENT_RESEND: Duration = Duration::from_secs(30);
+
 const DISPLAY_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 
 /// this device's displays

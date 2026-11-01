@@ -351,6 +351,12 @@ impl InputCapture {
         std::mem::take(&mut self.pressed_keys)
     }
 
+    /// Puts the cursor at a point in device-independent display coordinates
+    /// (see [`displays`]), where the backend supports it.
+    pub fn warp(&mut self, point: (i32, i32)) {
+        self.capture.warp(point);
+    }
+
     /// destroy the input capture
     pub async fn terminate(&mut self) -> Result<(), CaptureError> {
         self.capture.terminate().await
@@ -454,6 +460,9 @@ trait Capture: Stream<Item = Result<(Position, CaptureEvent), CaptureError>> + U
     /// let the pointer leave at `pos` only through `gates`, anywhere with
     /// `None`
     fn set_gates(&mut self, _pos: Position, _gates: Option<Vec<Gate>>) {}
+
+    /// put the cursor at this device-independent point
+    fn warp(&mut self, _point: (i32, i32)) {}
 
     /// destroy the input capture
     async fn terminate(&mut self) -> Result<(), CaptureError>;

@@ -183,7 +183,7 @@ impl Emulation for WindowsEmulation {
         self.second_cursors.insert(handle, cursor);
     }
 
-    fn take_crossed_edge(&mut self, handle: EmulationHandle) -> Option<Edge> {
+    fn take_crossed_edge(&mut self, handle: EmulationHandle) -> Option<(Edge, (i32, i32))> {
         self.second_cursors.get_mut(&handle)?.crossed.take()
     }
 }
@@ -200,7 +200,7 @@ struct SecondCursor {
     /// system cursor position to return to once all buttons are released
     restore_to: Option<(i32, i32)>,
     /// edge pushed against, not yet reported
-    crossed: Option<Edge>,
+    crossed: Option<(Edge, (i32, i32))>,
 }
 
 impl SecondCursor {
@@ -209,7 +209,7 @@ impl SecondCursor {
         match event {
             PointerEvent::Motion { dx, dy, .. } => {
                 if let Some(edge) = self.pointer.move_by(dx, dy, &self.displays) {
-                    self.crossed = Some(edge);
+                    self.crossed = Some((edge, self.pointer.position()));
                 }
                 let at = self.pointer.position();
                 if let Some(overlay) = &self.overlay {

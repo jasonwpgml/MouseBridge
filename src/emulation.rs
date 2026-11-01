@@ -4,7 +4,7 @@ use crate::listen::{LanMouseListener, ListenEvent, ListenerCreationError};
 use futures::StreamExt;
 use input_emulation::{Edge, EmulationHandle, InputEmulation, InputEmulationError};
 use input_event::Event;
-use lan_mouse_ipc::DisplayInfo;
+use lan_mouse_ipc::{DisplayInfo, Placement};
 use lan_mouse_proto::{Position, ProtoEvent};
 use local_channel::mpsc::{Receiver, Sender, channel};
 use std::{
@@ -64,6 +64,14 @@ pub(crate) enum EmulationEvent {
     CrossedEdge {
         addr: SocketAddr,
         pos: lan_mouse_ipc::Position,
+        /// where on the edge, in pointer coordinates
+        point: (i32, i32),
+    },
+    /// a peer arranged itself and this device on the canvas
+    PeerArrangement {
+        addr: SocketAddr,
+        you: Placement,
+        me: Placement,
     },
     /// peer sent us a Hello with its build commit hash. Used to
     /// populate `client_manager.peer_commit` from the listen side
@@ -87,7 +95,9 @@ pub(crate) enum EmulationEvent {
 
 enum EmulationRequest {
     Reenable,
-    Release(SocketAddr),
+    /// tell a peer its capture should end, its cursor coming back at the
+    /// given point if there is one
+    Release(SocketAddr, Option<(i32, i32)>),
     ChangePort(u16),
     /// tell the connected peers about this device's displays again
     SendDisplays,
@@ -123,8 +133,12 @@ impl Emulation {
     }
 
     pub(crate) fn send_leave_event(&self, addr: SocketAddr) {
+        self.send_leave_event_at(addr, None);
+    }
+
+    pub(crate) fn send_leave_event_at(&self, addr: SocketAddr, point: Option<(i32, i32)>) {
         self.request_tx
-            .send(EmulationRequest::Release(addr))
+            .send(EmulationRequest::Release(addr, point))
             .expect("channel closed");
     }
 
@@ -197,6 +211,11 @@ impl ListenTask {
                             }
                             ProtoEvent::EnterAt { x, y } => self.emulation_proxy.enter_at(addr, (x, y)),
                             ProtoEvent::Clicked => self.event_tx.send(EmulationEvent::PeerClicked { addr }).expect("channel closed"),
+                            ProtoEvent::Arrangement { you_x, you_y, you_size, me_x, me_y, me_size } => {
+                                let you = Placement { x: you_x, y: you_y, size: you_size };
+                                let me = Placement { x: me_x, y: me_y, size: me_size };
+                                self.event_tx.send(EmulationEvent::PeerArrangement { addr, you, me }).expect("channel closed");
+                            }
                             ProtoEvent::Leave(_) => {
                                 self.emulation_proxy.remove(addr);
                                 self.listener.reply(addr, ProtoEvent::Ack(0)).await;
@@ -246,7 +265,12 @@ impl ListenTask {
                     // reenable emulation
                     EmulationRequest::Reenable => self.emulation_proxy.reenable(),
                     // notify the other end that we hit a barrier (should release capture)
-                    EmulationRequest::Release(addr) => self.listener.reply(addr, ProtoEvent::Leave(0)).await,
+                    EmulationRequest::Release(addr, point) => {
+                        if let Some((x, y)) = point {
+                            self.listener.reply(addr, ProtoEvent::EnterAt { x, y }).await;
+                        }
+                        self.listener.reply(addr, ProtoEvent::Leave(0)).await;
+                    }
                     EmulationRequest::ChangePort(port) => {
                         self.listener.request_port_change(port);
                         let result = self.listener.port_changed().await;
@@ -504,10 +528,10 @@ impl EmulationTask {
                     ProxyRequest::Input(event, addr) => {
                         let handle = self.handle(emulation, addr).await;
                         emulation.consume(event, handle).await?;
-                        if let Some(edge) = emulation.take_crossed_edge(handle) {
+                        if let Some((edge, point)) = emulation.take_crossed_edge(handle) {
                             let pos = to_ipc_pos(edge_position(edge));
                             self.event_tx
-                                .send(EmulationEvent::CrossedEdge { addr, pos })
+                                .send(EmulationEvent::CrossedEdge { addr, pos, point })
                                 .expect("channel closed");
                         }
                     },

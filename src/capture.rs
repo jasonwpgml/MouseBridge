@@ -81,6 +81,8 @@ enum CaptureRequest {
     /// let the pointer reach a client only through these passages, or
     /// anywhere along its edge with `None`
     SetPassages(CaptureHandle, Option<Vec<Passage>>),
+    /// send an event to a client
+    Send(CaptureHandle, ProtoEvent),
     /// a mouse button was pressed on this device
     LocalClick,
     /// a mouse button was pressed on this client
@@ -98,6 +100,16 @@ pub(crate) struct Passage {
     /// pointer units per device-independent unit on the portal's display, in
     /// percent
     pub pointer_scale: i32,
+}
+
+impl Passage {
+    /// where the pointer enters the client, having left at `point` in
+    /// pointer coordinates
+    pub(crate) fn entry_point(&self, point: (i32, i32)) -> (i32, i32) {
+        let scale = self.pointer_scale.max(1);
+        self.portal
+            .entry_point((point.0 * 100 / scale, point.1 * 100 / scale))
+    }
 }
 
 /// where keyboard input goes
@@ -133,6 +145,7 @@ impl Capture {
             key_remaps: Default::default(),
             keyboard: Default::default(),
             passages: Default::default(),
+            return_point: None,
             ack_deadline: None,
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
@@ -203,6 +216,10 @@ impl Capture {
         let _ = self.request_tx.send(CaptureRequest::SetKeyboard(route));
     }
 
+    pub(crate) fn send_event(&self, handle: CaptureHandle, event: ProtoEvent) {
+        let _ = self.request_tx.send(CaptureRequest::Send(handle, event));
+    }
+
     pub(crate) fn local_click(&self) {
         let _ = self.request_tx.send(CaptureRequest::LocalClick);
     }
@@ -249,6 +266,8 @@ struct CaptureTask {
     key_remaps: HashMap<CaptureHandle, KeyRemap>,
     keyboard: KeyboardRoute,
     passages: HashMap<CaptureHandle, Vec<Passage>>,
+    /// where the active client said the cursor comes back
+    return_point: Option<(i32, i32)>,
     /// when to give up on a client that has not acknowledged entering it
     ack_deadline: Option<Instant>,
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
@@ -318,6 +337,12 @@ impl CaptureTask {
         }
     }
 
+    async fn send_event(&self, handle: CaptureHandle, event: ProtoEvent) {
+        if let Err(e) = self.conn.send(event, handle).await {
+            log::debug!("{event} to client {handle} failed: {e}");
+        }
+    }
+
     /// tells the clients this device was clicked, for those whose keys
     /// follow clicks
     async fn local_click(&mut self) {
@@ -362,9 +387,7 @@ impl CaptureTask {
             .get(&handle)?
             .iter()
             .find(|p| p.gate.contains(side, point))?;
-        let scale = passage.pointer_scale.max(1);
-        let point = (point.0 * 100 / scale, point.1 * 100 / scale);
-        Some(passage.portal.entry_point(point))
+        Some(passage.entry_point(point))
     }
 
     fn set_key_remap(&mut self, handle: CaptureHandle, remap: Option<KeyRemap>) {
@@ -421,6 +444,7 @@ impl CaptureTask {
                         CaptureRequest::SetKeyRemap(h, r) => self.set_key_remap(h, r),
                         CaptureRequest::SetKeyboard(route) => self.set_keyboard(route),
                         CaptureRequest::SetPassages(h, p) => self.set_passages(h, p),
+                        CaptureRequest::Send(h, e) => self.send_event(h, e).await,
                         CaptureRequest::LocalClick => self.local_click().await,
                         CaptureRequest::ClientClicked(h) => self.clicked(Some(h)),
                         CaptureRequest::SendDisplays => self.send_displays().await,
@@ -503,10 +527,15 @@ impl CaptureTask {
                             self.state = State::Sending;
                             self.ack_deadline = None;
                         }
+                        // where the cursor comes back, sent before `Leave`
+                        ProtoEvent::EnterAt { x, y } => self.return_point = Some((x, y)),
                         // client disconnected
                         ProtoEvent::Leave(_) => {
                             log::info!("releasing capture: left remote client device region");
                             self.release_capture(capture).await?;
+                            if let Some(point) = self.return_point.take() {
+                                capture.warp(point);
+                            }
                         },
                         _ => {}
                     }
@@ -542,6 +571,7 @@ impl CaptureTask {
                         self.set_passages(h, p);
                         capture.set_gates(h, self.gates(h));
                     }
+                    CaptureRequest::Send(h, e) => self.send_event(h, e).await,
                     CaptureRequest::LocalClick => self.local_click().await,
                     CaptureRequest::ClientClicked(h) => self.clicked(Some(h)),
                     CaptureRequest::SendDisplays => self.send_displays().await,

@@ -230,8 +230,8 @@ impl InputEmulation {
     }
 
     /// The screen edge the handle's second cursor was pushed against since
-    /// the last call, if any.
-    pub fn take_crossed_edge(&mut self, handle: EmulationHandle) -> Option<Edge> {
+    /// the last call, if any, and where on it.
+    pub fn take_crossed_edge(&mut self, handle: EmulationHandle) -> Option<(Edge, (i32, i32))> {
         self.emulation.take_crossed_edge(handle)
     }
 
@@ -270,7 +270,7 @@ trait Emulation: Send {
     async fn terminate(&mut self);
     async fn set_second_cursor(&mut self, _handle: EmulationHandle, _label: String) {}
     async fn enter_at(&mut self, _handle: EmulationHandle, _point: (i32, i32)) {}
-    fn take_crossed_edge(&mut self, _handle: EmulationHandle) -> Option<Edge> {
+    fn take_crossed_edge(&mut self, _handle: EmulationHandle) -> Option<(Edge, (i32, i32))> {
         None
     }
 }

@@ -7,6 +7,11 @@ use std::pin::Pin;
 use std::task::ready;
 use tokio::sync::mpsc::{Receiver, channel};
 
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
+};
+use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+
 use super::{Capture, CaptureError, CaptureEvent, Gate, Position};
 
 mod display_util;
@@ -40,6 +45,22 @@ impl Capture for WindowsInputCapture {
 
     fn set_gates(&mut self, pos: Position, gates: Option<Vec<Gate>>) {
         self.event_thread.set_gates(pos, gates);
+    }
+
+    fn warp(&mut self, (x, y): (i32, i32)) {
+        // the display decides the scaling, as it did when it was reported
+        let scale = crate::displays()
+            .into_iter()
+            .find(|d| d.x <= x && x < d.x + d.width && d.y <= y && y < d.y + d.height)
+            .map_or(100, |d| d.scale as i32);
+        let (x, y) = (x * scale / 100, y * scale / 100);
+        unsafe {
+            let previous = SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            if let Err(e) = SetCursorPos(x, y) {
+                log::warn!("could not move the cursor to {x},{y}: {e}");
+            }
+            SetThreadDpiAwarenessContext(previous);
+        }
     }
 }
 
