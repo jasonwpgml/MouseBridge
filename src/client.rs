@@ -202,6 +202,19 @@ impl ClientManager {
         changed
     }
 
+    /// forget the address the client connected from; returns true if there
+    /// was one
+    pub(crate) fn clear_seen_ip(&self, handle: ClientHandle) -> bool {
+        let cleared = match self.clients.borrow_mut().get_mut(handle as usize) {
+            Some((_, s)) => s.seen_ip.take().is_some(),
+            None => false,
+        };
+        if cleared {
+            self.update_ips(handle);
+        }
+        cleared
+    }
+
     fn update_ips(&self, handle: ClientHandle) {
         if let Some((c, s)) = self.clients.borrow_mut().get_mut(handle as usize) {
             s.ips = c
@@ -427,6 +440,11 @@ mod tests {
         assert!(ips.contains(&seen));
         assert!(ips.contains(&"192.168.45.12".parse().unwrap()));
 
+        assert!(clients.clear_seen_ip(handle));
+        assert!(!clients.clear_seen_ip(handle));
+        assert!(!clients.get_ips(handle).unwrap().contains(&seen));
+
+        clients.set_seen_ip(handle, seen);
         clients.set_hostname(handle, Some("other".into()));
         assert!(!clients.get_ips(handle).unwrap().contains(&seen));
     }

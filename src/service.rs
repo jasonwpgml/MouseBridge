@@ -583,7 +583,13 @@ impl Service {
     }
 
     fn remove_authorized_key(&mut self, fp: String) {
-        self.authorized_keys.write().expect("lock").remove(&fp);
+        let name = self.authorized_keys.write().expect("lock").remove(&fp);
+        // an address learned through this key is no longer vouched for
+        if let Some(handle) = name.and_then(|name| self.client_manager.client_named(&name)) {
+            if self.client_manager.clear_seen_ip(handle) {
+                self.broadcast_client(handle);
+            }
+        }
         let keys = self.authorized_keys.read().expect("lock").clone();
         self.notify_frontend(FrontendEvent::AuthorizedUpdated(keys));
     }
