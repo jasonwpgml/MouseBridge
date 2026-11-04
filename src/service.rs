@@ -389,6 +389,7 @@ impl Service {
                 }
             }
             EmulationEvent::Connected { addr, fingerprint } => {
+                self.learn_client_ip(addr, &fingerprint);
                 self.notify_frontend(FrontendEvent::DeviceConnected { addr, fingerprint });
             }
             EmulationEvent::PeerDisplay {
@@ -461,6 +462,29 @@ impl Service {
             }
         };
         self.broadcast_client(handle);
+    }
+
+    /// A device that connected to us can be reached at the address it came
+    /// from, even when the address configured for it went stale (DHCP gave it
+    /// another) and its name does not resolve. The client it belongs to is
+    /// the one named like its authorized key.
+    fn learn_client_ip(&mut self, addr: SocketAddr, fingerprint: &str) {
+        let name = self
+            .authorized_keys
+            .read()
+            .expect("lock")
+            .get(fingerprint)
+            .cloned();
+        let Some(handle) = name.and_then(|name| self.client_manager.client_named(&name)) else {
+            return;
+        };
+        if self.client_manager.set_seen_ip(handle, addr.ip()) {
+            log::info!(
+                "client {handle} connected from {}, trying it there too",
+                addr.ip()
+            );
+            self.broadcast_client(handle);
+        }
     }
 
     fn resolve(&self, handle: ClientHandle) {
@@ -687,26 +711,13 @@ impl Service {
             KeyboardMode::FollowPointer => KeyboardRoute::FollowPointer,
             KeyboardMode::Local => KeyboardRoute::Local,
             KeyboardMode::LastClicked => KeyboardRoute::LastClicked(None),
-            KeyboardMode::Device(hostname) => {
-                let client = self
-                    .client_manager
-                    .registered_clients()
-                    .into_iter()
-                    .find(|&h| {
-                        self.client_manager
-                            .get_hostname(h)
-                            .is_some_and(|name| name.eq_ignore_ascii_case(hostname))
-                    });
-                match client {
-                    Some(handle) => KeyboardRoute::Client(handle),
-                    None => {
-                        log::warn!(
-                            "keyboard is locked to {hostname}, which is no configured client"
-                        );
-                        KeyboardRoute::FollowPointer
-                    }
+            KeyboardMode::Device(hostname) => match self.client_manager.client_named(hostname) {
+                Some(handle) => KeyboardRoute::Client(handle),
+                None => {
+                    log::warn!("keyboard is locked to {hostname}, which is no configured client");
+                    KeyboardRoute::FollowPointer
                 }
-            }
+            },
         };
         self.capture.set_keyboard(route);
     }

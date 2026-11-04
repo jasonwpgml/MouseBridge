@@ -175,6 +175,10 @@ pub struct ClientState {
     pub alive: bool,
     /// ips from dns
     pub dns_ips: Vec<IpAddr>,
+    /// the address the client last connected to this device from, which
+    /// still reaches it when its configured address and name have gone stale
+    #[serde(default)]
+    pub seen_ip: Option<IpAddr>,
     /// all ip addresses associated with a particular client
     /// e.g. Laptops usually have at least an ethernet and a wifi port
     /// which have different ip addresses

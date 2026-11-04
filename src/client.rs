@@ -186,6 +186,22 @@ impl ClientManager {
         self.update_ips(handle);
     }
 
+    /// remember the address the client connected to this device from;
+    /// returns true if it is new
+    pub(crate) fn set_seen_ip(&self, handle: ClientHandle, ip: IpAddr) -> bool {
+        let changed = match self.clients.borrow_mut().get_mut(handle as usize) {
+            Some((_, s)) if s.seen_ip != Some(ip) => {
+                s.seen_ip = Some(ip);
+                true
+            }
+            _ => false,
+        };
+        if changed {
+            self.update_ips(handle);
+        }
+        changed
+    }
+
     fn update_ips(&self, handle: ClientHandle) {
         if let Some((c, s)) = self.clients.borrow_mut().get_mut(handle as usize) {
             s.ips = c
@@ -193,8 +209,22 @@ impl ClientManager {
                 .iter()
                 .cloned()
                 .chain(s.dns_ips.iter().cloned())
+                .chain(s.seen_ip)
                 .collect::<HashSet<_>>();
         }
+    }
+
+    /// find a client by its hostname, ignoring case
+    pub(crate) fn client_named(&self, hostname: &str) -> Option<ClientHandle> {
+        self.clients
+            .borrow()
+            .iter()
+            .find(|(_, (c, _))| {
+                c.hostname
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(hostname))
+            })
+            .map(|(k, _)| k as ClientHandle)
     }
 
     /// update the hostname of the given client
@@ -210,6 +240,7 @@ impl ClientManager {
             c.hostname = hostname;
             s.active_addr = None;
             s.dns_ips.clear();
+            s.seen_ip = None;
             drop(clients);
             self.update_ips(handle);
             true
@@ -372,5 +403,31 @@ impl ClientManager {
             .borrow()
             .get(handle as usize)
             .map(|(_, s)| s.ips.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_seen_address_is_tried_until_the_hostname_changes() {
+        let clients = ClientManager::default();
+        let handle = clients.add_client();
+        clients.set_hostname(handle, Some("Jason-MacAir".into()));
+        clients.set_fix_ips(handle, vec!["192.168.45.12".parse().unwrap()]);
+
+        assert_eq!(clients.client_named("jason-macair"), Some(handle));
+        assert_eq!(clients.client_named("DESKTOP-SN73G0N"), None);
+
+        let seen: IpAddr = "192.168.45.95".parse().unwrap();
+        assert!(clients.set_seen_ip(handle, seen));
+        assert!(!clients.set_seen_ip(handle, seen));
+        let ips = clients.get_ips(handle).unwrap();
+        assert!(ips.contains(&seen));
+        assert!(ips.contains(&"192.168.45.12".parse().unwrap()));
+
+        clients.set_hostname(handle, Some("other".into()));
+        assert!(!clients.get_ips(handle).unwrap().contains(&seen));
     }
 }
